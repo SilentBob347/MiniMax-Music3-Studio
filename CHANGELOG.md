@@ -3,6 +3,26 @@
 What changed, newest first. Dates are release dates; the studio is versioned by its
 Windows build.
 
+## 2026-09-24 — 1.6.2
+
+### Fixed
+
+- **Runs on every NVIDIA card from the GTX 900 series on.** For some cards the engine carried
+  only PTX, which a driver older than CUDA 13 cannot compile, and the first song failed with
+  "PTX was compiled with an unsupported toolchain". The studio now ships two CUDA builds of
+  the engine with compiled code for every architecture, and picks the one the card and its
+  driver run: CUDA 13 for Turing and newer (GTX 16, RTX 20–50, Tesla T4, A100, RTX A-series,
+  L4/L40, H100) with driver 580 or newer; CUDA 12 for Maxwell, Pascal and Volta (GTX 900/1000,
+  Titan X/Xp/V, Tesla M40, P40, P100, V100) and for any card on a driver from 525 to 579. The
+  cuBLAS of that build is downloaded once, as before.
+- **Cards before Ampere** get the engine's FP16 clamp on their own: their tensor cores
+  accumulate in FP16, which can overflow into silence.
+
+### Engine
+
+- minimaxmusic.cpp 120a4f6: backends load at run time and the studio names the CUDA build.
+  The audio is the same to the byte.
+
 ## 2026-09-24 — 1.6.1
 
 ### Fixed
