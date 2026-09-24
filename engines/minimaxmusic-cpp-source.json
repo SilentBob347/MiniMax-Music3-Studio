@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/timoncool/minimaxmusic.cpp.git",
-  "commit": "8b3620073086bb054d9157461702bf82481428f4",
+  "commit": "8e6d54febf034467dc9744a15a977fd3f72ca0e6",
   "license": "MIT",
   "build": {
     "windows": "buildall.cmd",
