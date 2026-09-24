@@ -352,7 +352,8 @@ impl EngineOptions {
     /// the only one, whatever happens to it. Auto goes CUDA, Vulkan, the
     /// processor: CUDA when one of its builds runs this card and driver, then
     /// Vulkan, which fails fast on a machine without a Vulkan card, and the
-    /// processor always, last.
+    /// processor always, last. Not Vulkan beside an NVIDIA card: the DiT on
+    /// Vulkan hangs an RTX 4090 until Windows resets its driver.
     fn device_chain(&self, failed: &[music_engine::mm_server::ComputeBackend]) -> Vec<music_engine::mm_server::ComputeBackend> {
         use music_engine::mm_server::ComputeBackend;
         if self.backend != ComputeBackend::Auto {
@@ -362,7 +363,9 @@ impl EngineOptions {
         if cuda_build::current().is_some() {
             chain.push(ComputeBackend::Cuda);
         }
-        chain.push(ComputeBackend::Vulkan);
+        if !cuda_build::nvidia_card() {
+            chain.push(ComputeBackend::Vulkan);
+        }
         chain.retain(|device| !failed.contains(device));
         chain.push(ComputeBackend::Cpu);
         chain
@@ -723,7 +726,8 @@ pub async fn serve() -> anyhow::Result<()> {
                         let auto = state.engine_options.read().await.backend == music_engine::mm_server::ComputeBackend::Auto;
                         let active = *state.active_device.read().await;
                         if let Some(device) = active.filter(|device| auto && *device != music_engine::mm_server::ComputeBackend::Cpu) {
-                            if describes_device_failure(&last_run_log().to_lowercase()) {
+                            let log = last_run_log().to_lowercase();
+                            if describes_device_failure(&log) || died_silently(&log) {
                                 music_engine::mm_server::note_in_log(&format!("{} failed on this machine; leaving it for this session", device_name(device)));
                                 state.failed_devices.write().await.push(device);
                             }
@@ -3106,6 +3110,15 @@ fn last_run_log() -> String {
     let tail = music_engine::mm_server::startup_log_tail(400);
     let start = tail.iter().rposition(|line| line.contains("---- starting")).unwrap_or(0);
     tail[start..].join("\n")
+}
+
+/// Whether the engine ended without a word about why. Its own failures -
+/// an assertion, an error, running out of memory - are written before it
+/// goes; a device lost under the driver takes the process with nothing said.
+fn died_silently(log: &str) -> bool {
+    !["error", "assert", "fatal", "exception", "abort", "failed", "out of memory"]
+        .iter()
+        .any(|marker| log.contains(marker))
 }
 
 /// Whether a lowercased engine log says the compute device itself failed -
@@ -5757,6 +5770,13 @@ mod tests {
         assert!(describes_device_failure("[load] fatal: mm3_cuda_backend=c:\\x\\cuda13\\ggml-cuda.dll did not load"));
         assert!(!describes_device_failure("cuda error: out of memory\ncudamalloc failed"));
         assert!(!describes_device_failure("[load] self-test on cuda0: ok (1.2 ms)\n[server] listening on 127.0.0.1:8085"));
+    }
+
+    #[test]
+    fn an_engine_that_left_without_a_word_counts_as_a_lost_device() {
+        assert!(died_silently("[dit] graph: 1236 nodes, t=689, b=2"));
+        assert!(!died_silently("ggml_assert: x failed"));
+        assert!(!died_silently("cuda error: out of memory"));
     }
 
     #[test]

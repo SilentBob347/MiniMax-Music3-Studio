@@ -82,6 +82,22 @@ fn parse_query(line: &str) -> Option<((u32, u32), u32)> {
     Some(((major.parse().ok()?, minor.parse().ok()?), driver_major))
 }
 
+/// Whether the machine has an NVIDIA card with a working driver, whether or
+/// not a CUDA build runs it.
+pub fn nvidia_card() -> bool {
+    static PRESENT: OnceLock<bool> = OnceLock::new();
+    *PRESENT.get_or_init(|| {
+        let mut command = Command::new("nvidia-smi");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        command.arg("-L").output().is_ok_and(|output| output.status.success())
+    })
+}
+
 /// The build this machine runs, none without an NVIDIA card one of the builds
 /// supports.
 pub fn current() -> Option<CudaBuild> {
