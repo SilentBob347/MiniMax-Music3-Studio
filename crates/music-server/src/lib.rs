@@ -4010,9 +4010,10 @@ async fn create_song_karaoke(
         .get_song(&id)
         .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "no such song".into()))?;
-    let audio = song
-        .audio_path
-        .clone()
+    let audio = state
+        .library
+        .media_path_for_song(&song)
+        .map(|path| path.to_string_lossy().into_owned())
         .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "this track has no audio to listen to".into()))?;
     if !auto_title::has_sung_lines(&song.lyrics) {
         return Err(api_error(StatusCode::BAD_REQUEST, "karaoke.instrumental".into()));
