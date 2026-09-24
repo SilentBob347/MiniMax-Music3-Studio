@@ -150,7 +150,10 @@ function Invoke-CustomCudaBuild {
     # database that address cannot be turned into a line of code. It costs a
     # file next to the executable and no speed: the optimiser is untouched.
     $symbols = '-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=ProgramDatabase -DCMAKE_EXE_LINKER_FLAGS=/DEBUG -DCMAKE_SHARED_LINKER_FLAGS=/DEBUG'
-    $command = "call `"$vcvars`" >nul && cmake -S . -B `"$buildDirectoryName`" -DGGML_CUDA=ON $ccache $flashAttention $symbols $settings && cmake --build `"$buildDirectoryName`" --config Release --target mm-server --target neural-codec --parallel $parallelism"
+    # Ninja drives nvcc and cl directly, so the build does not depend on the
+    # CUDA MSBuild integration being installed into this Visual Studio.
+    if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { throw 'Ninja is required on PATH.' }
+    $command = "call `"$vcvars`" >nul && cmake -S . -B `"$buildDirectoryName`" -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON $ccache $flashAttention $symbols $settings && cmake --build `"$buildDirectoryName`" --target mm-server --target neural-codec --parallel $parallelism"
     Push-Location $engineWorktree
     # The compiler's own output must not become this function's return value:
     # PowerShell returns everything a function writes, and the build directory
@@ -186,6 +189,7 @@ Sync-PinnedSource
 $buildDirectoryName = Invoke-RuntimeBuild
 $runtime = @(
     (Join-Path $engineWorktree "$buildDirectoryName\Release\mm-server.exe"),
+    (Join-Path $engineWorktree "$buildDirectoryName\bin\mm-server.exe"),
     (Join-Path $engineWorktree "$buildDirectoryName\mm-server.exe"),
     (Join-Path $engineWorktree 'mm-server.exe')
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
