@@ -89,7 +89,7 @@ const ru: Guide = {
       list: [
         "MOSS-Music-8B слушает песню и сразу пишет описание в формате MiniMax: Global Metadata, Vocal Details, Arrangement. Так же описания делает автор тренера HOT-Step.",
         "Beat This! находит удары в записи и по ним считается темп, S-KEY (Deezer) определяет тональность. Числа MOSS в описании всегда заменяются измеренными.",
-        "MOSS занимает около 10 ГБ видеопамяти, одна песня описывается примерно за полминуты. Всё работает на вашем компьютере, ничего никуда не отправляется.",
+        "MOSS занимает около 12 ГБ видеопамяти; на RTX 4090 одна песня описывается за 6–7 секунд. Всё работает на вашем компьютере, ничего никуда не отправляется.",
         "Без пакета у песни есть кнопка «Описать», а в меню «⋯» — «Описать все»: ассистент пишет описание из того, что уже есть в поле, названия и текста. Песню он не слышит, поэтому сначала впишите коротко, что звучит, и проверьте результат на слух.",
       ],
     },
@@ -213,7 +213,7 @@ const en: Guide = {
       list: [
         "MOSS-Music-8B listens to a song and writes its caption in MiniMax's format at once: Global Metadata, Vocal Details, Arrangement. The author of the HOT-Step trainer makes captions the same way.",
         "Beat This! finds the beats in the recording and the tempo is worked out from them; S-KEY (Deezer) finds the key. The numbers MOSS puts in the caption are always replaced with the measured ones.",
-        "MOSS takes about 10 GB of video memory; a song is described in about half a minute. Everything runs on your computer, nothing is sent anywhere.",
+        "MOSS takes about 12 GB of video memory; on an RTX 4090 a song is described in 6–7 seconds. Everything runs on your computer, nothing is sent anywhere.",
         "Without the pack a song has a Describe button, and the ⋯ menu has Describe all: the assistant writes a caption from what the field, the title and the lyrics already say. It does not hear the song, so first write briefly what is heard, then check the result by ear.",
       ],
     },
@@ -337,7 +337,7 @@ const zh: Guide = {
       list: [
         "MOSS-Music-8B 聆听歌曲，直接写出 MiniMax 格式的描述：Global Metadata、Vocal Details、Arrangement。HOT-Step 训练器作者也这样做描述。",
         "Beat This! 在录音中找出节拍并据此计算速度，S-KEY（Deezer）判断调性。MOSS 写入描述的数字总是替换为测得的数值。",
-        "MOSS 约占 10 GB 显存，一首歌约半分钟。一切都在你的电脑上运行，不会发送到任何地方。",
+        "MOSS 约占 12 GB 显存；在 RTX 4090 上每首歌约 6–7 秒。一切都在你的电脑上运行，不会发送到任何地方。",
         "没有这个包时，歌曲有“描述”按钮，“⋯”菜单中有“全部描述”：助手根据字段中已有的内容、标题和歌词写描述。它听不到歌曲，所以请先简单写下听到的内容，并用耳朵检查结果。",
       ],
     },
@@ -461,7 +461,7 @@ const ja: Guide = {
       list: [
         "MOSS-Music-8B は曲を聴いて、MiniMax 形式のキャプションをそのまま書きます：Global Metadata、Vocal Details、Arrangement。HOT-Step トレーナーの作者も同じ方法でキャプションを作っています。",
         "Beat This! が録音の拍を見つけてテンポを計算し、S-KEY（Deezer）がキーを判定します。MOSS がキャプションに書いた数値は常に測定値に置き換えます。",
-        "MOSS は約 10 GB のビデオメモリを使い、1 曲あたり約 30 秒です。すべてあなたのコンピューターで動き、どこにも送信されません。",
+        "MOSS は約 12 GB のビデオメモリを使い、RTX 4090 なら 1 曲 6〜7 秒です。すべてあなたのコンピューターで動き、どこにも送信されません。",
         "パックがないときは、曲に「説明を書く」ボタン、「⋯」メニューに「すべて説明」があります。アシスタントは欄にすでにある内容、タイトル、歌詞からキャプションを書きます。曲は聴けないので、まず聞こえるものを短く書き、結果を耳で確認してください。",
       ],
     },
@@ -585,7 +585,7 @@ const ko: Guide = {
       list: [
         "MOSS-Music-8B는 곡을 듣고 MiniMax 형식의 캡션을 바로 씁니다: Global Metadata, Vocal Details, Arrangement. HOT-Step 트레이너 작성자도 같은 방법으로 캡션을 만듭니다.",
         "Beat This!가 녹음의 박을 찾아 템포를 계산하고, S-KEY(Deezer)가 키를 판별합니다. MOSS가 캡션에 쓴 숫자는 항상 측정값으로 바꿉니다.",
-        "MOSS는 약 10GB의 비디오 메모리를 쓰고, 한 곡에 약 30초가 걸립니다. 모든 것이 여러분의 컴퓨터에서 돌아가며 어디에도 보내지 않습니다.",
+        "MOSS는 약 12GB의 비디오 메모리를 쓰고, RTX 4090에서 한 곡에 6–7초가 걸립니다. 모든 것이 여러분의 컴퓨터에서 돌아가며 어디에도 보내지 않습니다.",
         "패키지가 없으면 곡에 \"설명 쓰기\" 버튼이, \"⋯\" 메뉴에 \"모두 설명\"이 있습니다. 어시스턴트는 칸에 이미 있는 내용, 제목, 가사로 캡션을 씁니다. 곡을 듣지 못하므로 먼저 들리는 것을 짧게 적고 결과를 귀로 확인하세요.",
       ],
     },
