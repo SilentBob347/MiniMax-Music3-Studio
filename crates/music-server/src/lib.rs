@@ -2144,7 +2144,7 @@ async fn describe_training_item(
     let caption = parts.iter().map(|(heading, body)| format!("{heading}\n{body}")).collect::<Vec<_>>().join("\n");
     state
         .training
-        .update_item(&id, &item, training::ItemPatch { style: Some(caption), ..Default::default() })
+        .update_item(&id, &item, training::ItemPatch { style: Some(caption), style_state: Some(training::StyleState::Done), heard: Some(None), ..Default::default() })
         .map(Json)
         .map_err(training_error)
 }
