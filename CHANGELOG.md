@@ -47,6 +47,9 @@ Windows build.
   as the same weights; a render on the Light DiT matches the Q8_0 one to 0.985.
 - **Clearing the create form, resetting its parameters and opening a saved prompt work
   again.** Each of them stopped the form on a setting that had been removed.
+- **Broken engine output is no longer saved as silence.** A NaN in the rendered audio
+  became the peak the MP3 was normalised to and turned the whole track silent; the song
+  now fails with a message saying so.
 
 ## 2026-09-24 — 1.5.2
 
