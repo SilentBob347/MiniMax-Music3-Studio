@@ -13,7 +13,8 @@
                 },
     "bundle":  {
                    "resources":  {
-                                     "resources/minimaxmusic-cpp":  "resources/minimaxmusic-cpp"
+                                     "resources/minimaxmusic-cpp":  "resources/minimaxmusic-cpp",
+                                     "resources/vst-host":  "resources/vst-host"
                                  },
                    "targets":  [
                                    "nsis"

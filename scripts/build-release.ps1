@@ -84,6 +84,7 @@ $templatePath = Join-Path $tauriRoot 'tauri.release.conf.template.json'
 $releaseConfigPath = Join-Path $tauriRoot 'tauri.release.conf.json'
 $releaseDir = Join-Path $repoRoot "release\$Version"
 $engineResourceRoot = Join-Path $tauriRoot 'resources\minimaxmusic-cpp'
+$vstResourceRoot = Join-Path $tauriRoot 'resources\vst-host'
 
 Push-Location $repoRoot
 try {
@@ -99,6 +100,14 @@ try {
     $ErrorActionPreference = 'Continue'
     & (Join-Path $PSScriptRoot 'build-minimax-runtime.ps1') -OutputDirectory $engineResourceRoot -RuntimeBackend $RuntimeBackend -CudaArchitecture universal
     if ($LASTEXITCODE -ne 0) { throw "the engine runtime build failed with exit code $LASTEXITCODE" }
+    # The VST host follows the trainer's HOT-Step commit; rebuilt only when that moves.
+    $trainSource = Get-Content -Raw (Join-Path $repoRoot 'engines\music-train-source.json') | ConvertFrom-Json
+    $vstStampPath = Join-Path $vstResourceRoot 'runtime.json'
+    $vstStamp = if (Test-Path $vstStampPath) { Get-Content -Raw $vstStampPath | ConvertFrom-Json } else { $null }
+    if (-not ($vstStamp -and $vstStamp.commit -eq $trainSource.commit -and (Test-Path (Join-Path $vstResourceRoot 'vst-host.exe')))) {
+        & (Join-Path $PSScriptRoot 'build-vst-host.ps1') -OutputDirectory $vstResourceRoot
+        if ($LASTEXITCODE -ne 0) { throw "the VST host build failed with exit code $LASTEXITCODE" }
+    }
     # The engine is built first on purpose: one of these tests reads the staged
     # bundle's import tables and fails if it names a library that is neither
     # beside it nor downloaded on first start. Run the other way round it would
@@ -144,6 +153,7 @@ try {
     if ([string]::IsNullOrWhiteSpace($binaryName)) { $binaryName = 'minimax-music3-studio-desktop' }
     Copy-Item (Join-Path $tauriRoot "target\release\$binaryName.exe") (Join-Path $portableRoot 'MiniMax-Music3-Studio.exe') -Force
     Copy-Item $engineResourceRoot (Join-Path $portableRoot 'resources\minimaxmusic-cpp') -Recurse -Force
+    Copy-Item $vstResourceRoot (Join-Path $portableRoot 'resources\vst-host') -Recurse -Force
     New-Item -ItemType File -Path (Join-Path $portableRoot 'portable.flag') -Force | Out-Null
     Compress-Archive -Path "$portableRoot\*" -DestinationPath (Join-Path $releaseDir "MiniMax-Music3-Studio-$Version-portable.zip") -Force
 
