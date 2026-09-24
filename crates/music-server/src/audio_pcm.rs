@@ -55,19 +55,77 @@ pub fn decode_stereo_44k(input: &Path) -> Result<Vec<f32>> {
     Ok(interleaved)
 }
 
+/// Decodes `input` to stereo at its own sample rate, for processing that must
+/// not resample: a mono source is doubled.
+pub fn decode_stereo(input: &Path) -> Result<audio_post::Stereo> {
+    let (mut channels, rate) = decode_channels(input)?;
+    if channels.is_empty() || channels[0].is_empty() {
+        bail!("{} decoded to no audio", input.display());
+    }
+    let left = channels.remove(0);
+    let right = if channels.is_empty() { left.clone() } else { channels.remove(0) };
+    Ok(audio_post::Stereo::new(left, right, rate))
+}
+
+/// Writes stereo as 24-bit PCM WAV, the studio's lossless format.
+pub fn write_wav24(path: &Path, audio: &audio_post::Stereo) -> Result<()> {
+    let file = File::create(path).with_context(|| format!("create {}", path.display()))?;
+    let mut out = BufWriter::new(file);
+    let frames = audio.frames();
+    let data_bytes = (frames * 2 * 3) as u32;
+    out.write_all(b"RIFF")?;
+    out.write_all(&(36 + data_bytes).to_le_bytes())?;
+    out.write_all(b"WAVEfmt ")?;
+    out.write_all(&16u32.to_le_bytes())?;
+    out.write_all(&1u16.to_le_bytes())?; // PCM
+    out.write_all(&2u16.to_le_bytes())?; // stereo
+    out.write_all(&audio.rate.to_le_bytes())?;
+    out.write_all(&(audio.rate * 2 * 3).to_le_bytes())?; // byte rate
+    out.write_all(&6u16.to_le_bytes())?; // block align
+    out.write_all(&24u16.to_le_bytes())?; // bits per sample
+    out.write_all(b"data")?;
+    out.write_all(&data_bytes.to_le_bytes())?;
+    const FULL: f32 = 8_388_607.0;
+    for frame in 0..frames {
+        for sample in [audio.left[frame], audio.right[frame]] {
+            let value = (sample.clamp(-1.0, 1.0) * FULL).round() as i32;
+            out.write_all(&value.to_le_bytes()[..3])?;
+        }
+    }
+    out.flush().context("finish writing the WAV")?;
+    Ok(())
+}
+
 /// Every channel kept apart, at the file's own sample rate.
 fn decode_channels(path: &Path) -> Result<(Vec<Vec<f32>>, u32)> {
     let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
-    let stream = MediaSourceStream::new(Box::new(file), Default::default());
+    let extension = path.extension().and_then(|value| value.to_str());
+    decode_source(Box::new(file), extension).with_context(|| format!("decode {}", path.display()))
+}
+
+/// Decodes audio held in memory - a track as the engine sent it - to stereo
+/// at its own rate; a mono source is doubled.
+pub fn decode_stereo_bytes(bytes: Vec<u8>, extension: &str) -> Result<audio_post::Stereo> {
+    let (mut channels, rate) = decode_source(Box::new(std::io::Cursor::new(bytes)), Some(extension))?;
+    if channels.is_empty() || channels[0].is_empty() {
+        bail!("the engine's audio decoded to nothing");
+    }
+    let left = channels.remove(0);
+    let right = if channels.is_empty() { left.clone() } else { channels.remove(0) };
+    Ok(audio_post::Stereo::new(left, right, rate))
+}
+
+fn decode_source(source: Box<dyn symphonia::core::io::MediaSource>, extension: Option<&str>) -> Result<(Vec<Vec<f32>>, u32)> {
+    let stream = MediaSourceStream::new(source, Default::default());
 
     let mut hint = Hint::new();
-    if let Some(extension) = path.extension().and_then(|value| value.to_str()) {
+    if let Some(extension) = extension {
         hint.with_extension(extension);
     }
 
     let probed = symphonia::default::get_probe()
         .format(&hint, stream, &FormatOptions::default(), &MetadataOptions::default())
-        .with_context(|| format!("recognise the format of {}", path.display()))?;
+        .context("recognise the audio format")?;
     let mut format = probed.format;
     let track = format
         .tracks()

@@ -31,6 +31,17 @@ export interface Song {
   timeSignature?: string;
   /** Native Music3 provenance is complete enough for POST /v1/music/replay. */
   nativeReplayAvailable?: boolean;
+  /** Processed versions kept beside the original; the active one plays. */
+  audioVersions?: SongVersion[];
+  /** `original`, a version id, or absent for a track never processed. */
+  activeVersion?: string;
+}
+
+export interface SongVersion {
+  id: string;
+  label: string;
+  createdAt: string;
+  settings?: Record<string, unknown>;
 }
 
 export interface Playlist {

@@ -1,3 +1,4 @@
+mod processing;
 mod auto_title;
 mod tagging;
 mod cover_prompt;
@@ -76,6 +77,8 @@ struct AppState {
     /// The separation run in progress, if any. One at a time: the model wants
     /// the whole machine for a minute, and two runs would only make both slow.
     separation_run: Arc<RwLock<Option<SeparationRun>>>,
+    /// The processing run in progress or the last one, with its preview.
+    processing_run: Arc<RwLock<Option<processing::ProcessRun>>>,
 }
 
 #[derive(Clone)]
@@ -473,6 +476,7 @@ pub async fn serve() -> anyhow::Result<()> {
             &studio_data_root().unwrap_or_else(|| std::path::PathBuf::from(".")),
         )),
         separation_run: Arc::new(RwLock::new(None)),
+        processing_run: Arc::new(RwLock::new(None)),
         selected_profile_id: Arc::new(RwLock::new(selected_profile_id)),
         selected_component_ids: Arc::new(RwLock::new(selected_component_ids)),
         settings_path,
@@ -492,6 +496,7 @@ pub async fn serve() -> anyhow::Result<()> {
             persisted.as_ref().map(|settings| settings.lyrics_sync.clone()).unwrap_or_default(),
         )),
     };
+    processing::clear_workspace(state.library.media_dir());
 
     let app = Router::new()
         .route("/health", get(health))
@@ -534,6 +539,14 @@ pub async fn serve() -> anyhow::Result<()> {
         .route("/v1/separation/settings", get(read_separation_settings).put(write_separation_settings))
         .route("/v1/separation/install", post(install_separation_model))
         .route("/v1/separation/remove", post(remove_separation_model))
+        .route("/v1/library/songs/{id}/process", post(start_processing))
+        .route("/v1/library/songs/{id}/version", axum::routing::put(select_song_version))
+        .route("/v1/library/songs/{id}/versions/{version}", axum::routing::delete(remove_song_version))
+        .route("/v1/processing", get(read_processing))
+        .route("/v1/processing/preview", get(processing_preview))
+        .route("/v1/processing/keep", post(keep_processing))
+        .route("/v1/processing/discard", post(discard_processing))
+        .route("/v1/processing/reference", post(upload_processing_reference))
         .route("/v1/library/songs/{id}/stems", get(read_stems).post(start_separation))
         .route("/v1/library/songs/{id}/stems/{stem}", get(read_stem_audio))
         .route("/v1/library/songs/{id}/cover/auto", post(draw_cover_now))
@@ -644,7 +657,12 @@ async fn library_media(State(state): State<AppState>, Path(song_id): Path<String
     {
         tag_stored_song(&state, &song_id).await;
     }
-    let bytes = tokio::fs::read(&path).await.map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("read song audio: {error}")))?;
+    serve_audio_file(&path, &headers).await
+}
+
+/// An audio file with single byte-range support, which `<audio>` seeking needs.
+async fn serve_audio_file(path: &std::path::Path, headers: &HeaderMap) -> Result<axum::response::Response, (StatusCode, Json<ApiError>)> {
+    let bytes = tokio::fs::read(path).await.map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("read song audio: {error}")))?;
     let content_type = match path.extension().and_then(|extension| extension.to_str()).map(|extension| extension.to_ascii_lowercase()).as_deref() {
         Some("mp3") => "audio/mpeg",
         Some("wav") => "audio/wav",
@@ -1083,6 +1101,256 @@ async fn install_separation_model(State(state): State<AppState>) -> Result<Json<
         let _ = separator.downloader().install(&separation::MODEL).await;
     });
     Ok(Json(serde_json::json!({ "started": true })))
+}
+
+/// Starts processing a track into a preview. One run at a time: the stages are
+/// quick, and a second request would only race the first for the preview.
+async fn start_processing(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<processing::ProcessRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<ApiError>)> {
+    if request.stages().is_empty() {
+        return Err(api_error(StatusCode::BAD_REQUEST, "choose at least one kind of processing".into()));
+    }
+    let song = state
+        .library
+        .get_song(&id)
+        .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Song not found".into()))?;
+    let source = state
+        .library
+        .media_path_for_song(&song)
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "this track has no stored audio".into()))?;
+    let media = state.library.media_dir().to_path_buf();
+    let reference = match &request.master {
+        None => None,
+        Some(processing::MasterSource::Song { song_id }) => {
+            let reference_song = state
+                .library
+                .get_song(song_id)
+                .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+                .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "the reference track is not in the library".into()))?;
+            Some(
+                state
+                    .library
+                    .media_path_for_song(&reference_song)
+                    .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "the reference track has no stored audio".into()))?,
+            )
+        }
+        Some(processing::MasterSource::Upload { upload_id }) => Some(
+            processing::workspace_file(&media, upload_id)
+                .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "the uploaded reference is gone; upload it again".into()))?,
+        ),
+    };
+
+    let run_id = uuid::Uuid::now_v7().simple().to_string();
+    {
+        // checked and claimed under one lock, so two requests cannot both start
+        let mut current = state.processing_run.write().await;
+        if current.as_ref().is_some_and(|run| !run.done) {
+            return Err(api_error(StatusCode::CONFLICT, "a track is already being processed".into()));
+        }
+        // a new run replaces the last preview nobody kept; its reference stays
+        // when this run masters to the same upload
+        if let Some(previous) = current.take() {
+            let keep = reference.clone();
+            for file in previous.leftovers(&media).into_iter().filter(|file| Some(file) != keep.as_ref()) {
+                let _ = std::fs::remove_file(file);
+            }
+        }
+        *current = Some(processing::ProcessRun {
+            id: run_id.clone(),
+            song_id: id.clone(),
+            stages: request.stages(),
+            stage: None,
+            done: false,
+            error: None,
+            preview: None,
+            preview_ready: false,
+            request: request.clone(),
+        });
+    }
+
+    let background = state.clone();
+    tokio::task::spawn_blocking(move || {
+        let handle = tokio::runtime::Handle::current();
+        let current = |run: &Option<processing::ProcessRun>| run.as_ref().is_some_and(|run| run.id == run_id);
+        let outcome = (|| -> anyhow::Result<std::path::PathBuf> {
+            let audio = processing::run(&source, reference.as_deref(), &request, |stage| {
+                let state = background.clone();
+                let run_id = run_id.clone();
+                handle.spawn(async move {
+                    if let Some(run) = state.processing_run.write().await.as_mut().filter(|run| run.id == run_id) {
+                        run.stage = Some(stage);
+                    }
+                });
+            })?;
+            let folder = processing::workspace(&media);
+            std::fs::create_dir_all(&folder)?;
+            let path = folder.join(format!("{id}-{}.wav", &run_id[run_id.len() - 8..]));
+            audio_pcm::write_wav24(&path, &audio)?;
+            Ok(path)
+        })();
+        handle.block_on(async {
+            let mut guard = background.processing_run.write().await;
+            if !current(&guard) {
+                // discarded while it worked: nothing will ever ask for the preview
+                if let Ok(path) = &outcome {
+                    let _ = std::fs::remove_file(path);
+                }
+                return;
+            }
+            let run = guard.as_mut().expect("checked above");
+            run.done = true;
+            match outcome {
+                Ok(path) => {
+                    run.preview = path.file_name().and_then(|name| name.to_str()).map(str::to_owned);
+                    run.preview_ready = run.preview.is_some();
+                }
+                Err(error) => run.error = Some(format!("{error:#}")),
+            }
+        });
+    });
+    Ok(Json(serde_json::json!({ "started": true })))
+}
+
+async fn read_processing(State(state): State<AppState>) -> Json<Value> {
+    Json(serde_json::json!({ "run": state.processing_run.read().await.clone() }))
+}
+
+async fn processing_preview(State(state): State<AppState>, headers: HeaderMap) -> Result<axum::response::Response, (StatusCode, Json<ApiError>)> {
+    let name = state.processing_run.read().await.as_ref().and_then(|run| run.preview.clone());
+    let path = name
+        .and_then(|name| processing::workspace_file(state.library.media_dir(), &name))
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "there is no processed preview".into()))?;
+    serve_audio_file(&path, &headers).await
+}
+
+#[derive(Debug, Deserialize)]
+struct KeepProcessingRequest {
+    /// What the version is called in the track's version list.
+    label: String,
+}
+
+/// Keeps the preview as a version of its track, playing from now on.
+async fn keep_processing(
+    State(state): State<AppState>,
+    Json(input): Json<KeepProcessingRequest>,
+) -> Result<Json<library::Song>, (StatusCode, Json<ApiError>)> {
+    let run = state.processing_run.read().await.clone().filter(|run| run.preview_ready);
+    let run = run.ok_or_else(|| api_error(StatusCode::NOT_FOUND, "there is no processed preview to keep".into()))?;
+    let media = state.library.media_dir().to_path_buf();
+    let preview = run
+        .preview
+        .as_deref()
+        .and_then(|name| processing::workspace_file(&media, name))
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "the preview file is gone".into()))?;
+    let filename = format!("{}-v{}-{}.wav", run.song_id, &uuid::Uuid::now_v7().simple().to_string()[..8], run.stages.join("-"));
+    let stored = media.join(&filename);
+    std::fs::rename(&preview, &stored).map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("store the version: {error}")))?;
+    let reference_title = match &run.request.master {
+        Some(processing::MasterSource::Song { song_id }) => state.library.get_song(song_id).ok().flatten().map(|song| song.title),
+        _ => None,
+    };
+    let settings = processing::settings_record(&run.request, reference_title.as_deref());
+    let recorded = match state.library.add_song_version(&run.song_id, &filename, input.label.trim(), settings) {
+        Ok(Some(song)) => Ok(song),
+        Ok(None) => Err(api_error(StatusCode::NOT_FOUND, "Song not found".into())),
+        Err(error) => Err(api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string())),
+    };
+    let song = match recorded {
+        Ok(song) => song,
+        Err(problem) => {
+            // the preview goes back where it was, so the run can still be kept or discarded
+            if let Err(error) = std::fs::rename(&stored, &preview) {
+                eprintln!("[ERROR] processing: return {} to the workspace: {error}", stored.display());
+            }
+            return Err(problem);
+        }
+    };
+    let mut current = state.processing_run.write().await;
+    if current.as_ref().is_some_and(|now| now.id == run.id) {
+        for file in current.take().map(|run| run.leftovers(&media)).unwrap_or_default() {
+            let _ = std::fs::remove_file(file);
+        }
+    }
+    Ok(Json(song))
+}
+
+/// Forgets the run, finished or not. A worker still going sees it is no longer
+/// current and removes its own output.
+async fn discard_processing(State(state): State<AppState>) -> Json<Value> {
+    if let Some(run) = state.processing_run.write().await.take() {
+        for file in run.leftovers(state.library.media_dir()) {
+            let _ = std::fs::remove_file(file);
+        }
+    }
+    Json(serde_json::json!({ "discarded": true }))
+}
+
+/// Stores a reference recording for mastering. It waits in the processing
+/// folder, not the library: a reference is a tool, not a song.
+async fn upload_processing_reference(
+    State(state): State<AppState>,
+    mut multipart: Multipart,
+) -> Result<Json<Value>, (StatusCode, Json<ApiError>)> {
+    while let Some(field) = multipart.next_field().await.map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("read the upload: {e}")))? {
+        if field.name() != Some("audio") {
+            continue;
+        }
+        let original = field.file_name().unwrap_or("reference").to_owned();
+        let extension = std::path::Path::new(&original)
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(str::to_ascii_lowercase)
+            .filter(|value| matches!(value.as_str(), "mp3" | "wav" | "flac" | "ogg" | "m4a"))
+            .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "the reference must be MP3, WAV, FLAC, OGG or M4A".into()))?;
+        let bytes = field.bytes().await.map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("read the upload: {e}")))?;
+        let folder = processing::workspace(state.library.media_dir());
+        std::fs::create_dir_all(&folder).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let upload_id = format!("reference-{}.{extension}", uuid::Uuid::now_v7().simple());
+        std::fs::write(folder.join(&upload_id), &bytes).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        return Ok(Json(serde_json::json!({ "upload_id": upload_id, "name": original })));
+    }
+    Err(api_error(StatusCode::BAD_REQUEST, "no audio part in the upload".into()))
+}
+
+#[derive(Debug, Deserialize)]
+struct SelectVersionRequest {
+    /// `original`, or the id of one of the track's versions.
+    version: String,
+}
+
+async fn select_song_version(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<SelectVersionRequest>,
+) -> Result<Json<library::Song>, (StatusCode, Json<ApiError>)> {
+    let song = state
+        .library
+        .select_song_version(&id, &input.version)
+        .map_err(|error| api_error(StatusCode::BAD_REQUEST, error.to_string()))?
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Song not found".into()))?;
+    tag_stored_song(&state, &id).await;
+    Ok(Json(song))
+}
+
+async fn remove_song_version(
+    State(state): State<AppState>,
+    Path((id, version)): Path<(String, String)>,
+) -> Result<Json<library::Song>, (StatusCode, Json<ApiError>)> {
+    let (song, file) = state
+        .library
+        .remove_song_version(&id, &version)
+        .map_err(|error| api_error(StatusCode::BAD_REQUEST, error.to_string()))?
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Song not found".into()))?;
+    if let Some(file) = file {
+        if let Err(error) = std::fs::remove_file(&file) {
+            eprintln!("[ERROR] remove version {version} of {id}: {error}");
+        }
+    }
+    Ok(Json(song))
 }
 
 async fn read_stems(State(state): State<AppState>, Path(id): Path<String>) -> Json<Value> {
@@ -3800,7 +4068,7 @@ async fn create_music_job(
         Ok(value) => value,
         Err(error) => return (StatusCode::BAD_REQUEST, Json(failed_request_job(request, engine_id, error))),
     };
-    match state.music_server.submit(mm_request.clone()).await {
+    match state.music_server.submit(engine_submission(&mm_request)).await {
         Ok(remote) => {
             let job = MusicJob {
                 id: remote.id,
@@ -3858,7 +4126,7 @@ async fn replay_music_job(
     let lyrics = synth_request.get("lyrics").and_then(Value::as_str).unwrap_or_default().to_owned();
     let remote = state
         .music_server
-        .submit(synth_request.clone())
+        .submit(engine_submission(&synth_request))
         .await
         .map_err(|error| api_error(StatusCode::SERVICE_UNAVAILABLE, format!("the engine refused the job: {error}")))?;
     let job = MusicJob {
@@ -4047,10 +4315,33 @@ async fn import_completed_mm_result(state: &AppState, job: &MusicJob, job_id: &s
         // The replay request is sparse: upstream omits any field that still
         // holds its default, so a 60-second track has no "duration" key at all.
         // Take the length from the job that was actually submitted.
-        let extension = mm_result::audio_extension(&track.audio_content_type)?;
+        let mut extension = mm_result::audio_extension(&track.audio_content_type)?;
+        let mut audio = track.audio;
+        let mut replay = replay;
+        if studio_encodes_mp3(&job.generation_settings) && extension == "wav" {
+            let kbps = job.generation_settings.get("mp3_bitrate").and_then(Value::as_u64).map_or(DEFAULT_MP3_KBPS, |value| value as u32);
+            let peak_clip = job.generation_settings.get("peak_clip").and_then(Value::as_u64).map_or(DEFAULT_PEAK_CLIP, |value| value as u32);
+            audio = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<u8>> {
+                let mut stereo = audio_pcm::decode_stereo_bytes(audio, "wav")?;
+                audio_post::encode::normalize_peak(&mut stereo, peak_clip);
+                audio_post::encode::mp3(&stereo, kbps)
+            })
+            .await
+            .context("the MP3 encoder stopped")??;
+            extension = "mp3";
+            // the track says what it is: an MP3 at the rate LAME wrote
+            let written = Value::from(audio_post::encode::mp3_bitrate(kbps));
+            for record in [
+                generation_settings.as_object_mut().context("generation settings are not a JSON object")?,
+                replay.as_object_mut().context("the replay request is not a JSON object")?,
+            ] {
+                record.insert("output_format".into(), Value::from("mp3"));
+                record.insert("mp3_bitrate".into(), written.clone());
+            }
+        }
         let metadata = serde_json::json!({
             "duration_seconds": library::audio_duration_seconds(
-                &track.audio,
+                &audio,
                 extension,
                 replay.get("mp3_bitrate").and_then(Value::as_u64).map(|value| value as u32),
             ),
@@ -4063,7 +4354,7 @@ async fn import_completed_mm_result(state: &AppState, job: &MusicJob, job_id: &s
             title: job.title.clone(), metadata, caption, lyrics, generation_settings, replay_request: Some(replay), audio_codes: Some(audio_codes),
             engine_id: job.engine_id.clone(), profile_id: profile_id.clone(),
             source: "local_generation".into(),
-            audio_extension: extension, audio: track.audio,
+            audio_extension: extension, audio,
         })?;
         let audio_url = format!("/v1/library/media/{}", imported_song.song.id);
         tag_stored_song(&state, &imported_song.song.id).await;
@@ -4283,6 +4574,31 @@ fn selected_local_music_engine(configuration: &StudioConfiguration) -> Option<St
         .and_then(|selection| selection.local_engine.clone())
 }
 
+/// The bitrate a track is encoded at when the request names none.
+const DEFAULT_MP3_KBPS: u32 = 320;
+/// Samples per million allowed to clip when the level is set, as the engine does.
+const DEFAULT_PEAK_CLIP: u32 = 10;
+
+/// Whether the studio makes this track's MP3 itself; the engine's own default
+/// output is MP3, so a request naming no format counts.
+fn studio_encodes_mp3(settings: &Value) -> bool {
+    settings.get("output_format").and_then(Value::as_str).is_none_or(|format| format == "mp3")
+}
+
+/// What the engine is asked for. An MP3 is made by the studio with LAME from
+/// the engine's unencoded 32-bit float output - the model's own rate and
+/// precision - so no track is ever encoded twice or by the engine's encoder.
+fn engine_submission(body: &Value) -> Value {
+    let mut engine = body.clone();
+    if studio_encodes_mp3(body) {
+        if let Some(fields) = engine.as_object_mut() {
+            fields.insert("output_format".into(), Value::from("wav32"));
+            fields.remove("mp3_bitrate");
+        }
+    }
+    engine
+}
+
 fn mm_request_from(request: &CreateMusicJobRequest, selected_profile_id: Option<&str>, selected_component_ids: Option<&[String]>, manager: Option<&ModelManager>) -> Result<Value, String> {
     if request.caption.trim().is_empty() || request.lyrics.trim().is_empty() {
         return Err("caption and lyrics are required by mm-server".into());
@@ -4355,7 +4671,7 @@ fn mm_request_from(request: &CreateMusicJobRequest, selected_profile_id: Option<
     body["lm_batch_size"] = Value::from(request.lm_batch_size.unwrap_or(1));
     body["synth_batch_size"] = Value::from(request.synth_batch_size.unwrap_or(1));
     body["peak_clip"] = Value::from(request.peak_clip.unwrap_or(10));
-    body["mp3_bitrate"] = Value::from(request.mp3_bitrate.unwrap_or(128));
+    body["mp3_bitrate"] = Value::from(request.mp3_bitrate.unwrap_or(DEFAULT_MP3_KBPS));
     insert_optional(&mut body, "seed", request.seed);
     insert_optional(&mut body, "lm_seed", request.lm_seed);
     insert_optional(&mut body, "lm_cfg", request.lm_cfg);
@@ -4456,6 +4772,17 @@ fn api_error(status: StatusCode, error: String) -> (StatusCode, Json<ApiError>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_engine_is_asked_for_float_when_the_studio_makes_the_mp3() {
+        let mp3 = serde_json::json!({ "caption": "x", "output_format": "mp3", "mp3_bitrate": 320 });
+        let sent = engine_submission(&mp3);
+        assert_eq!(sent["output_format"], "wav32");
+        assert!(sent.get("mp3_bitrate").is_none());
+        assert_eq!(engine_submission(&serde_json::json!({ "caption": "x" }))["output_format"], "wav32");
+        let wav = serde_json::json!({ "caption": "x", "output_format": "wav24" });
+        assert_eq!(engine_submission(&wav), wav);
+    }
 
     /// Every file the editor page loads has to be embedded. The WaveSurfer
     /// bundle was ignored by git, so a clean checkout built a blank editor.
@@ -4598,7 +4925,7 @@ mod tests {
         assert_eq!(body["lm_batch_size"], 1);
         assert_eq!(body["synth_batch_size"], 1);
         assert_eq!(body["peak_clip"], 10);
-        assert_eq!(body["mp3_bitrate"], 128);
+        assert_eq!(body["mp3_bitrate"], 320);
 
         let invalid = CreateMusicJobRequest { synth_batch_size: Some(10), ..request };
         assert!(mm_request_from(&invalid, None, None, None).unwrap_err().contains("synth_batch_size"));

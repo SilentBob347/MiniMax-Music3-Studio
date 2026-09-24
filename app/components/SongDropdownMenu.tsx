@@ -4,6 +4,7 @@ import { Song } from '../types';
 import { useI18n } from '../context/I18nContext';
 import { openExternal } from '../services/externalLinks';
 import { apiUrl } from '../services/apiBase';
+import { downloadSongAudio } from '../services/songDownload';
 import {
     Clapperboard,
     Edit3,
@@ -15,6 +16,7 @@ import {
     Loader2,
     Mic2,
     Scissors,
+    Wand2,
 } from 'lucide-react';
 
 interface SongDropdownMenuProps {
@@ -174,23 +176,8 @@ export const SongDropdownMenu: React.FC<SongDropdownMenuProps> = ({
 
 
     const handleDownload = async () => {
-        if (!song.audioUrl) return;
         try {
-            // Fetch as blob to handle cross-origin
-            const response = await fetch(song.audioUrl);
-            const blob = await response.blob();
-            const url = URL.createObjectURL(blob);
-
-            const link = document.createElement('a');
-            link.href = url;
-            const extension = song.audioUrl.split('.').pop()?.toLowerCase() === 'wav' ? 'wav' : 'mp3';
-            link.download = `${song.title || 'song'}.${extension}`;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-
-            // Clean up blob URL
-            URL.revokeObjectURL(url);
+            await downloadSongAudio(song);
         } catch (error) {
             console.error('Download failed:', error);
         }
@@ -227,6 +214,13 @@ export const SongDropdownMenu: React.FC<SongDropdownMenuProps> = ({
                     label={t('videoExport')}
                     onClick={() => handleAction(onExportVideo)}
                     disabled={!song.audioUrl}
+                />
+            )}
+            {song.audioUrl && (
+                <MenuItem
+                    icon={<Wand2 size={14} />}
+                    label={t('processMenu')}
+                    onClick={() => handleAction(() => window.dispatchEvent(new CustomEvent('mm3:process-song', { detail: song })))}
                 />
             )}
             {onSeparateStems && (

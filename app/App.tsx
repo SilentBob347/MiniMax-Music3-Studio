@@ -8,6 +8,7 @@ import { LibraryView } from './components/LibraryView';
 import { CreatePlaylistModal, AddToPlaylistModal } from './components/PlaylistModals';
 import { CoverRegenModal } from './components/CoverRegenModal';
 import { ReplayModal } from './components/ReplayModal';
+import { ProcessingModal } from './components/ProcessingModal';
 import { VideoGeneratorModal } from './components/VideoGeneratorModal';
 import { SettingsModal } from './components/SettingsModal';
 import { Song, Music3Request, Music3Job, View, Playlist } from './types';
@@ -143,11 +144,17 @@ function AppContent() {
       setSettingsSection((event as CustomEvent<string>).detail);
       setShowSettingsModal(true);
     };
+    const process = (event: Event) => {
+      const song = (event as CustomEvent<Song>).detail;
+      if (song) setSongToProcess(song);
+    };
     window.addEventListener('mm3:open-stems', open);
     window.addEventListener('mm3:open-settings', openSettings);
+    window.addEventListener('mm3:process-song', process);
     return () => {
       window.removeEventListener('mm3:open-stems', open);
       window.removeEventListener('mm3:open-settings', openSettings);
+      window.removeEventListener('mm3:process-song', process);
     };
   }, []);
 
@@ -299,6 +306,7 @@ function AppContent() {
   // and RightSidebar. Updates songs.cover_url via /api/songs/:id/regen-cover.
   const [songForCoverRegen, setSongForCoverRegen] = useState<Song | null>(null);
   const [songForReplay, setSongForReplay] = useState<Song | null>(null);
+  const [songToProcess, setSongToProcess] = useState<Song | null>(null);
   const [songForVideo, setSongForVideo] = useState<Song | null>(null);
 
   // Settings Modal
@@ -1213,6 +1221,16 @@ function AppContent() {
     return () => window.removeEventListener('mm3:library-changed', reload);
   }, [refreshNativeLibrary]);
 
+  // Background work reports its outcome here once, and the toast goes away.
+  useEffect(() => {
+    const onToast = (event: Event) => {
+      const { message, type } = (event as CustomEvent<{ message: string; type?: ToastType }>).detail;
+      showToast(message, type ?? 'info');
+    };
+    window.addEventListener('mm3:toast', onToast);
+    return () => window.removeEventListener('mm3:toast', onToast);
+  }, []);
+
   // Render Layout Logic
   const renderContent = () => {
     switch (currentView) {
@@ -1470,6 +1488,13 @@ function AppContent() {
         song={songForVideo}
         onClose={() => setSongForVideo(null)}
       />
+      {songToProcess && (
+        <ProcessingModal
+          song={songToProcess}
+          onClose={() => setSongToProcess(null)}
+          onKept={() => { void refreshNativeLibrary(); }}
+        />
+      )}
       {songForReplay && (
         <ReplayModal
           song={songForReplay}

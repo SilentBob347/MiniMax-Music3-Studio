@@ -373,7 +373,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
 
   const reset = () => {
     setName(''); setGlobalMetadata(''); setVocalDetails(''); setArrangement(''); setLyrics(''); setInstrumental(false);
-    setDuration(''); setLmBatch(''); setLmSeed(''); setLmCfg(''); setLmTopK(''); setAudioCodes('');
+    setDuration(''); setLmSeed(''); setLmCfg(''); setLmTopK(''); setAudioCodes('');
     setSteps(''); setDitCfg(''); setSynthBatch(''); setSeed('');
     setPeakClip(''); setMp3Bitrate('320'); setFormat('mp3'); setModels({});
     setError(null);
@@ -409,7 +409,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
       dit_cfg: numberOrUndefined(ditCfg) ?? 1.7,
       peak_clip: numberOrUndefined(peakClip) ?? 10,
       output_format: format,
-      mp3_bitrate: numberOrUndefined(mp3Bitrate) ?? 128,
+      mp3_bitrate: numberOrUndefined(mp3Bitrate) ?? 320,
     };
     if (name.trim()) request.title = name.trim();
     if (coverPrompt.trim()) request.cover_prompt = coverPrompt.trim();
@@ -445,7 +445,6 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
       setLmCfg(asString(parsed.lm_cfg));
       setLmTopK(asString(parsed.lm_top_k));
       setLmSeed(asString(parsed.lm_seed));
-      setLmBatch(asString(parsed.lm_batch_size));
       setDitCfg(asString(parsed.dit_cfg));
       setSynthBatch(asString(parsed.synth_batch_size));
       setSeed(asString(parsed.seed));
@@ -592,7 +591,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
   ];
 
   const resetParameters = () => {
-    setDuration(''); setLmBatch(''); setLmSeed(''); setLmCfg(''); setLmTopK(''); setAudioCodes('');
+    setDuration(''); setLmSeed(''); setLmCfg(''); setLmTopK(''); setAudioCodes('');
     setSteps(''); setDitCfg(''); setSynthBatch(''); setSeed(''); setRandomizeSeed(true);
     setPeakClip(''); setMp3Bitrate('320'); setFormat('mp3'); setModels({});
   };
@@ -921,7 +920,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
                   />
                   <div className="mt-3 grid grid-cols-2 gap-2">
                     <Field label={t('mp3Bitrate')}>
-                      <select value={mp3Bitrate || String(defaults.mp3_bitrate ?? 128)} onChange={event => setMp3Bitrate(event.target.value)} disabled={format !== 'mp3'} className={CONTROL}>
+                      <select value={mp3Bitrate || String(defaults.mp3_bitrate ?? 320)} onChange={event => setMp3Bitrate(event.target.value)} disabled={format !== 'mp3'} className={CONTROL}>
                         {['128', '192', '256', '320'].map(rate => <option key={rate} value={rate}>{rate} kbps</option>)}
                       </select>
                     </Field>
