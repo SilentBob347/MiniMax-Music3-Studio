@@ -59,6 +59,32 @@ Instrumental: state in vocal_details that the piece is instrumental with no sung
 /// singer's, only the layout is the assistant's.
 const TRANSCRIPT_RULES: &str = r#"The transcript comes from speech recognition run on the vocals of a finished recording: one line per sung phrase, each after its start time, with the recogniser's mistakes. Write the lyric sheet of that recording exactly as it is sung. Keep the singer's words, in their order, their language and their alphabet - Cyrillic stays Cyrillic, never transliterate; correct a word only where the recognition is plainly wrong and the right word is certain from the line; never invent, rewrite, translate or complete lines, and drop fragments the recogniser picked up in instrumental passages. Leave the times out. Organise the lines into sections: a block of lines that returns is the [chorus], written out every time it is sung; the blocks between choruses are the [verse]; a block sung once that is neither is the [bridge]; a block that leads into the chorus every time is the [pre-chorus]; lines before the first verse are the [intro] and after the last chorus the [outro]. Every section starts with its tag in square brackets, lowercase, in English, on a line of its own, its lines follow below it, and a blank line separates sections. Use no other tags and no section names in words."#;
 
+/// How the three caption fields become the caption the engine reads.
+const CAPTION_LAYOUT: &str = "The caption create_song takes, and a dataset song's style, is the three fields under their headings, each heading alone on its line:\n\nGlobal Metadata\n<global_metadata>\nVocal Details\n<vocal_details>\nArrangement\n<arrangement>";
+
+/// The writing guides an agent connected over MCP reads, by topic.
+pub const GUIDE_TOPICS: &[(&str, &str)] = &[
+    ("song", "writing a whole song for create_song: caption, lyrics, title, cover prompt, duration"),
+    ("caption", "the structured caption MiniMax Music 3 reads, for a new song and for a dataset song"),
+    ("lyrics", "lyrics: section tags, sizing to the duration, diction, duets, instrumentals"),
+    ("transcript", "turning recognised words into a lyric sheet"),
+    ("sections", "marking the sections of a published lyric sheet without changing a word"),
+];
+
+/// The rules the studio's own assistant is prompted with, as a guide for an
+/// agent connected over MCP: the same text, so an agent writes the way the
+/// model expects.
+pub fn writing_guide(topic: &str) -> Option<String> {
+    Some(match topic {
+        "song" => format!("{CAPTION_CONTRACT}\n\n{CAPTION_LAYOUT}\n\n{LYRICS_RULES}{DICTION_RULE}{DUET_RULE}{INSTRUMENTAL_RULE}\n\n{EXTRA}\n\n{VALIDATION}"),
+        "caption" => format!("{CAPTION_CONTRACT}{INSTRUMENTAL_RULE}\n\n{CAPTION_LAYOUT}\n\nA dataset song is captioned by MOSS-Music from what it hears, with the measured tempo and key put into Basic Attributes; correct what it got wrong and keep that shape."),
+        "lyrics" => format!("{LYRICS_RULES}{DICTION_RULE}{DUET_RULE}"),
+        "transcript" => TRANSCRIPT_RULES.to_string(),
+        "sections" => SHEET_SECTIONS_PROMPT.to_string(),
+        _ => return None,
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AssistTarget {

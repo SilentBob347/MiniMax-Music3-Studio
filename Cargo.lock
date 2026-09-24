@@ -1579,6 +1579,7 @@ dependencies = [
  "sysinfo",
  "tempfile",
  "tokio",
+ "tower",
  "tower-http",
  "uuid",
  "zip",

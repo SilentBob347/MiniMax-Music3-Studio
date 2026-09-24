@@ -129,6 +129,23 @@ weights, downloaded only when you open training. Describing songs by ear needs a
 12 GB of VRAM and 10 GB more disk for MOSS-Music; without it the captions are written by
 hand.
 
+## Drive it from an agent (MCP)
+
+While the studio is open it serves MCP at `http://127.0.0.1:8765/mcp`: an agent such as
+Claude Code, Claude Desktop or Cursor does everything the page does, through the same code -
+songs, the library, covers, stems, karaoke, processing, video clips, the player, LoRA, and a
+LoRA from a folder of songs end to end - and sees and works the window itself: a
+screenshot, its controls, clicks and typing. 143 tools, grouped by area. MiniMax's own
+caption rules and reference captions come with the server, so the agent writes the
+captions, lyrics and lyric layouts itself instead of the studio's small assistant.
+
+```bash
+claude mcp add --transport http minimax-studio http://127.0.0.1:8765/mcp
+```
+
+[docs/mcp-skill.md](docs/mcp-skill.md) is the skill an agent reads: every tool, what the
+model expects, and step-by-step recipes.
+
 ## Models
 
 A runnable Music3 installation is always five components: language model, RVQ depth
