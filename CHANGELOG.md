@@ -12,7 +12,7 @@ Windows build.
   gets its own strength for the language model (the composition) and for the DiT (the
   sound), and its trigger word goes into the caption for you. The engine merges LoRA and
   LoKr into either half at load and reads PEFT, LyCORIS, diffusers and ComfyUI files
-  (minimaxmusic.cpp fork `adapters`, 5922db4), with the rsLoRA scale honoured.
+  (minimaxmusic.cpp fork `adapters`, 12534e3), with the rsLoRA scale honoured.
 - **Training your own LoRA.** An optional tab on the LoRA page. 5–20 songs of one artist
   or style become a language-model LoRA on your card with HOT-Step's `mm3-lm-train` and
   its HOT-PiZZA recipe: rank 128, AdamW at 8e-5 with warm-up, a 1536-frame window that
