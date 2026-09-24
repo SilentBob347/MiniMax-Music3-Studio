@@ -221,10 +221,10 @@ impl Training {
         &self.downloader
     }
 
-    /// The trainer: where `YUE_TRAIN_BIN` points in a developer build, else
+    /// The trainer: where `MM3_TRAIN_BIN` points in a developer build, else
     /// the one the pack unpacked.
     pub fn trainer(&self) -> PathBuf {
-        std::env::var_os("YUE_TRAIN_BIN")
+        std::env::var_os("MM3_TRAIN_BIN")
             .map(PathBuf::from)
             .unwrap_or_else(|| self.downloader.runtime_dir(TRAINER_FOLDER).join(&trainer_source().shipped_as))
     }
@@ -393,6 +393,46 @@ impl Training {
         let _ = std::fs::remove_dir_all(self.vocals_dir(id)?.join(item.file.trim_end_matches(".wav")));
         self.save_dataset(&dataset)?;
         Ok(dataset)
+    }
+
+    /// Takes a dataset another studio of the family wrote: its `dataset.json`
+    /// and the WAV files it names. The copy gets an id of its own, so the same
+    /// folder can come in twice without the two meeting.
+    pub fn import_dataset(&self, manifest: &[u8], files: &[(String, Vec<u8>)]) -> Result<Dataset> {
+        let mut dataset: Dataset = serde_json::from_slice(manifest).context("dataset.json is not a dataset")?;
+        if dataset.format != dataset_format() {
+            bail!("dataset.json is {}, this studio reads {}", dataset.format, dataset_format());
+        }
+        if dataset.items.is_empty() {
+            bail!("the dataset has no songs");
+        }
+        let by_name = |name: &str| files.iter().find(|(path, _)| path.rsplit(['/', '\\']).next() == Some(name));
+        let missing: Vec<&str> = dataset.items.iter().map(|item| item.file.as_str()).filter(|file| by_name(file).is_none()).collect();
+        if !missing.is_empty() {
+            bail!("the folder lacks {} of the dataset's songs: {}", missing.len(), missing.join(", "));
+        }
+        dataset.id = new_id();
+        dataset.created_at = now();
+        let audio = self.dataset_dir(&dataset.id)?.join("audio");
+        std::fs::create_dir_all(&audio)?;
+        for item in &dataset.items {
+            if item.file.contains(['/', '\\']) || !item.file.ends_with(".wav") {
+                bail!("{} is not a dataset audio file", item.file);
+            }
+            let (_, bytes) = by_name(&item.file).context("song vanished")?;
+            std::fs::write(audio.join(&item.file), bytes)?;
+        }
+        self.save_dataset(&dataset)?;
+        Ok(dataset)
+    }
+
+    /// The folder a dataset lives in, to share it with another studio.
+    pub fn dataset_folder(&self, id: &str) -> Result<PathBuf> {
+        let dir = self.dataset_dir(id)?;
+        if !dir.join("dataset.json").is_file() {
+            bail!("no dataset {id}");
+        }
+        Ok(dir)
     }
 
     pub fn remove_dataset(&self, id: &str) -> Result<()> {

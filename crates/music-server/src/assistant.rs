@@ -467,10 +467,18 @@ pub fn content_of(response: &Value) -> Result<String> {
 }
 
 /// Sampling fitted to the task: laying out a transcript is copying, not
-/// writing, so it runs cold whatever the model publishes.
+/// writing, so it runs cold whatever the model publishes. The length is
+/// bounded by what the task can need, so a model looping on one line fails in
+/// seconds instead of at the request timeout.
 pub fn fit_to_task(mut body: Value, target: AssistTarget) -> Value {
     if target == AssistTarget::Transcript {
         body["temperature"] = Value::from(0.2);
+        body["max_tokens"] = Value::from(4096);
+    }
+    // A caption is a few hundred words; a small model that starts repeating
+    // itself inside a JSON string otherwise runs until the request times out.
+    if target == AssistTarget::Prompt {
+        body["max_tokens"] = Value::from(2048);
     }
     body
 }

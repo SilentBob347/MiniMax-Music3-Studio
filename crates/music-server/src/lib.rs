@@ -582,11 +582,15 @@ pub async fn serve() -> anyhow::Result<()> {
         .route("/v1/training/pack/install", post(install_training_pack))
         .route("/v1/training/pack/cancel", post(cancel_training_pack))
         .route("/v1/training/datasets", post(create_training_dataset))
+        // A dataset is gigabytes of lossless audio, far over the studio's usual body limit.
+        .route("/v1/training/datasets/import", post(import_training_dataset).layer(DefaultBodyLimit::max(TRAINING_UPLOAD_LIMIT)))
+        .route("/v1/training/datasets/{id}/reveal", post(reveal_training_dataset))
         .route("/v1/training/datasets/{id}", axum::routing::patch(update_training_dataset).delete(delete_training_dataset))
         .route("/v1/training/datasets/{id}/songs", post(add_training_songs))
-        .route("/v1/training/datasets/{id}/files", post(upload_training_files))
+        .route("/v1/training/datasets/{id}/files", post(upload_training_files).layer(DefaultBodyLimit::max(TRAINING_UPLOAD_LIMIT)))
         .route("/v1/training/datasets/{id}/items/{item}", axum::routing::patch(update_training_item).delete(delete_training_item))
         .route("/v1/training/datasets/{id}/items/{item}/autofill", post(autofill_training_item))
+        .route("/v1/training/datasets/{id}/items/{item}/describe", post(describe_training_item))
         .route("/v1/training/runs", post(start_training))
         .route("/v1/training/runs/{id}/cancel", post(cancel_training))
         .route("/v1/training/runs/{id}", axum::routing::delete(delete_training_run))
@@ -1561,6 +1565,9 @@ async fn vocal_separator(state: &AppState) -> Option<Arc<StudioSeparator>> {
     }))
 }
 
+/// What one upload of songs to a dataset may weigh.
+const TRAINING_UPLOAD_LIMIT: usize = 16 * 1024 * 1024 * 1024;
+
 fn training_error(error: anyhow::Error) -> (StatusCode, Json<ApiError>) {
     api_error(StatusCode::BAD_REQUEST, format!("{error:#}"))
 }
@@ -1624,6 +1631,42 @@ struct DatasetInput {
 
 async fn create_training_dataset(State(state): State<AppState>, Json(input): Json<DatasetInput>) -> Result<Json<training::Dataset>, (StatusCode, Json<ApiError>)> {
     state.training.create_dataset(input.name.as_deref().unwrap_or_default(), input.trigger.as_deref().unwrap_or_default()).map(Json).map_err(training_error)
+}
+
+/// Takes a dataset folder uploaded from another studio: its dataset.json and
+/// the audio beside it.
+async fn import_training_dataset(State(state): State<AppState>, mut multipart: Multipart) -> Result<Json<training::Dataset>, (StatusCode, Json<ApiError>)> {
+    let mut manifest = None;
+    let mut files = Vec::new();
+    while let Some(field) = multipart.next_field().await.map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("read the upload: {e}")))? {
+        let Some(name) = field.file_name().map(str::to_owned) else { continue };
+        let bytes = field.bytes().await.map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("read {name}: {e}")))?.to_vec();
+        if name.rsplit(['/', '\\']).next() == Some("dataset.json") {
+            manifest = Some(bytes);
+        } else if name.to_ascii_lowercase().ends_with(".wav") {
+            files.push((name, bytes));
+        }
+    }
+    let manifest = manifest.ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "the folder has no dataset.json".into()))?;
+    let training = state.training.clone();
+    tokio::task::spawn_blocking(move || training.import_dataset(&manifest, &files))
+        .await
+        .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+        .map(Json)
+        .map_err(training_error)
+}
+
+/// Opens a dataset's folder in the file manager, to copy it to another studio.
+async fn reveal_training_dataset(State(state): State<AppState>, Path(id): Path<String>) -> Result<Json<Value>, (StatusCode, Json<ApiError>)> {
+    let folder = state.training.dataset_folder(&id).map_err(training_error)?;
+    #[cfg(windows)]
+    let opened = std::process::Command::new("explorer.exe").arg(&folder).spawn();
+    #[cfg(target_os = "macos")]
+    let opened = std::process::Command::new("open").arg(&folder).spawn();
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    let opened = std::process::Command::new("xdg-open").arg(&folder).spawn();
+    opened.map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+    Ok(Json(serde_json::json!({ "opened": folder.display().to_string() })))
 }
 
 async fn update_training_dataset(State(state): State<AppState>, Path(id): Path<String>, Json(input): Json<DatasetInput>) -> Result<Json<training::Dataset>, (StatusCode, Json<ApiError>)> {
@@ -1905,6 +1948,61 @@ async fn autofill_training_item(
     state
         .training
         .update_item(&id, &item, training::ItemPatch { lyrics: Some(lyrics), instrumental: Some(false), ..Default::default() })
+        .map(Json)
+        .map_err(training_error)
+}
+
+/// Writes a dataset song's structured caption with the writing assistant,
+/// from what the song already says about itself - its style line and its
+/// lyrics - the way the create form writes one. The trainer learns the song
+/// from this caption, and a two-line style is not what generation will send.
+async fn describe_training_item(
+    State(state): State<AppState>,
+    Path((id, item)): Path<(String, String)>,
+) -> Result<Json<training::Dataset>, (StatusCode, Json<ApiError>)> {
+    let dataset = state.training.dataset(&id).map_err(training_error)?;
+    let song = dataset
+        .items
+        .iter()
+        .find(|entry| entry.id == item)
+        .cloned()
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, format!("no song {item} in the dataset")))?;
+    let request = assistant::AssistRequest {
+        target: assistant::AssistTarget::Prompt,
+        description: String::new(),
+        instruction: format!("{}. Describe this finished recording: {}", song.title.trim(), song.style.trim()),
+        lyrics: if song.instrumental { String::new() } else { song.lyrics.clone() },
+        global_metadata: String::new(),
+        vocal_details: String::new(),
+        arrangement: String::new(),
+        duration_seconds: song.seconds,
+        instrumental: song.instrumental,
+    };
+    // A small local model now and then leaves a section out; it is asked once
+    // more, then the failure is the user's to see.
+    let mut parts = Vec::new();
+    for attempt in 0..2 {
+        let draft = match assistant_write(State(state.clone()), Json(request.clone())).await {
+            Ok(Json(draft)) => draft,
+            Err(error) if attempt == 0 => {
+                eprintln!("[WARN] describing {}: {}", song.title, error.1.0.error);
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        let section = |key: &str| draft.get(key).and_then(Value::as_str).map(str::trim).unwrap_or_default().to_string();
+        parts = vec![("Global Metadata", section("global_metadata")), ("Vocal Details", section("vocal_details")), ("Arrangement", section("arrangement"))];
+        if parts.iter().all(|(_, body)| !body.is_empty()) {
+            break;
+        }
+    }
+    if parts.is_empty() || parts.iter().any(|(_, body)| body.is_empty()) {
+        return Err(api_error(StatusCode::BAD_GATEWAY, "the assistant left a caption section empty twice; try again or write the caption".into()));
+    }
+    let caption = parts.iter().map(|(heading, body)| format!("{heading}\n{body}")).collect::<Vec<_>>().join("\n");
+    state
+        .training
+        .update_item(&id, &item, training::ItemPatch { style: Some(caption), ..Default::default() })
         .map(Json)
         .map_err(training_error)
 }
@@ -4208,12 +4306,15 @@ async fn assistant_write(
                     let effort = entry
                         .and_then(|entry| entry.reasoning.as_ref())
                         .and_then(|reasoning| reasoning.effort_for(config.reasoning_effort.as_deref()));
-                    assistant::chat_body_full(
-                        &model,
-                        &system,
-                        &user,
-                        effort.as_deref(),
-                        entry.map(|entry| serde_json::to_value(&entry.defaults).unwrap_or(Value::Null)).as_ref(),
+                    assistant::fit_to_task(
+                        assistant::chat_body_full(
+                            &model,
+                            &system,
+                            &user,
+                            effort.as_deref(),
+                            entry.map(|entry| serde_json::to_value(&entry.defaults).unwrap_or(Value::Null)).as_ref(),
+                        ),
+                        request.target,
                     )
                 },
             })
