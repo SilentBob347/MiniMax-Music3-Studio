@@ -1,5 +1,25 @@
 [
   {
+    "id": "family-yue2-studio",
+    "date": "2026-09-24",
+    "title": "🎵 В семействе студий пополнение: YuE2 Studio",
+    "body": "Вышла YuE2 Studio - третья студия в семействе после ACE-Step Studio и этой. Она выросла из MiniMax Music3 Studio и сделана так же: один exe, нативный движок yue2.cpp на C++, без Python.\n\nYuE2 - открытая модель от M-A-P, которая сначала пишет песню нотами, а потом поёт её. Партитуру можно открыть, поправить и перепеть ту же композицию. Ещё там есть каверы по записи, караоке-клипы и разбор песни на дорожки, а работает она от 6 ГБ видеопамяти.",
+    "tags": [
+      "YuE2",
+      "семейство"
+    ],
+    "links": [
+      {
+        "label": "YuE2 Studio на GitHub",
+        "url": "https://github.com/timoncool/YuE2-Studio"
+      },
+      {
+        "label": "ACE-Step Studio на GitHub",
+        "url": "https://github.com/timoncool/ACE-Step-Studio"
+      }
+    ]
+  },
+  {
     "id": "karaoke-on-faster-whisper",
     "date": "2026-08-19",
     "title": "🎤 Караоке переехало на faster-whisper",

@@ -3,6 +3,26 @@
 What changed, newest first. Dates are release dates; the studio is versioned by its
 Windows build.
 
+## 2026-09-24 — 1.5.2
+
+### Changed
+
+- **The engine follows minimaxmusic.cpp up to 448e880.** It draws the initial noise the way
+  the reference does, keeps the float fields of a request exact, fixes a Vulkan read of
+  the batch stride, stops with a clear error when its port is already taken, and brings
+  ggml up to date.
+- **Newer runtimes for the add-ons.** The assistant downloads llama.cpp b11146 (CUDA 13.4)
+  instead of b9966, and karaoke downloads ONNX Runtime 1.30.0 instead of 1.24.2. Add-ons
+  already installed keep working on the versions they have.
+- **A new studio in the family.** The news page announces YuE2 Studio, which grew out of
+  this one, with links to it and to ACE-Step Studio.
+
+### Fixed
+
+- **The audio editor's waveform library is now in the repository.** The folder was ignored
+  by git, so a clean checkout built an editor that opened blank; released builds were not
+  affected. A test now checks that every file the editor loads is built in.
+
 ## 2026-08-19 — 1.4.0
 
 ### Added

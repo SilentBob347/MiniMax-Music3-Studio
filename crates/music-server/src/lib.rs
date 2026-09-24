@@ -799,8 +799,8 @@ async fn separation_assets(State(state): State<AppState>) -> Json<Value> {
         },
         {
             "id": "onnxruntime-cuda",
-            "label": "ONNX Runtime 1.24.2 · CUDA",
-            "bytes": 280_855_316u64,
+            "label": "ONNX Runtime 1.30.0 · CUDA",
+            "bytes": 379_723_801u64,
             "note": "The CUDA build of the runtime.",
             "installed": state.lyrics_sync.has_cuda_runtime(),
         },
@@ -827,8 +827,8 @@ async fn separation_assets(State(state): State<AppState>) -> Json<Value> {
         },
         {
             "id": "onnxruntime",
-            "label": "ONNX Runtime 1.24.2",
-            "bytes": 74_075_355,
+            "label": "ONNX Runtime 1.30.0",
+            "bytes": 82_645_522,
             "note": "Runs the separator and the karaoke recogniser; shared between them.",
             "installed": runtime_installed,
         }
@@ -4456,6 +4456,29 @@ fn api_error(status: StatusCode, error: String) -> (StatusCode, Json<ApiError>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every file the editor page loads has to be embedded. The WaveSurfer
+    /// bundle was ignored by git, so a clean checkout built a blank editor.
+    #[test]
+    fn the_editor_page_loads_only_embedded_files() {
+        let page = EDITOR
+            .get_file("index.html")
+            .and_then(|file| file.contents_utf8())
+            .expect("the editor page is embedded");
+        let mut checked = 0;
+        for attribute in ["src=\"", "href=\""] {
+            for (at, _) in page.match_indices(attribute) {
+                let rest = &page[at + attribute.len()..];
+                let target = &rest[..rest.find('"').expect("a closed attribute")];
+                if target.contains(':') || target.starts_with('#') || target.is_empty() {
+                    continue;
+                }
+                assert!(EDITOR.get_file(target).is_some(), "the editor page loads {target}, which is not embedded");
+                checked += 1;
+            }
+        }
+        assert!(checked > 20, "only {checked} local references were found in the editor page");
+    }
 
     /// Nothing stays in VRAM unless the user asked for it. This is the setting
     /// the assistant's unload is tied to, and it is off to begin with.
