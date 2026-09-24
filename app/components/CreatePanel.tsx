@@ -3,6 +3,7 @@ import { karaokeReason } from '../services/karaoke';
 import { AlertTriangle, ChevronDown, CircleAlert, Dices, FolderOpen, Loader2, RotateCcw, Save, Sparkles, Square, Trash2, Wand2, Settings2 } from 'lucide-react';
 import type { Music3Request, Song } from '../types';
 import { useI18n } from '../context/I18nContext';
+import { useBridgeCommand } from '../services/mcpBridge';
 import { joinCaption, randomExample, splitCaption } from '../services/examples';
 import { AdapterPicker } from './AdapterPicker';
 import { usesFromSettings, type AdapterUse } from '../services/adapters';
@@ -520,7 +521,12 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
         body: payload,
         signal: run.signal,
       });
-      if (live.ok && live.body) {
+      if (!live.ok || !live.body) {
+        const refused = await live.json().catch(() => null);
+        throw new Error(refused?.error || String(live.status));
+      }
+      let body: Record<string, unknown> | null = null;
+      {
         const reader = live.body.getReader();
         const decoder = new TextDecoder();
         let carry = '';
@@ -534,7 +540,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
             carry = carry.slice(split + 2);
             split = carry.indexOf('\n\n');
             if (!frame.startsWith('data:')) continue;
-            let event: { stage?: string; delta?: string; text?: string; error?: string; model?: string };
+            let event: { stage?: string; delta?: string; text?: string; error?: string; model?: string; draft?: Record<string, unknown> };
             try {
               event = JSON.parse(frame.slice(5).trim());
             } catch {
@@ -542,6 +548,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
             }
             if (event.error) throw new Error(event.error);
             if (event.stage) setAssistStage(event.stage);
+            if (event.draft) body = event.draft;
             if (event.model) setAssistModel(event.model);
             if (event.delta) {
               streamed += event.delta;
@@ -550,16 +557,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
           }
         }
       }
-
-      // The stream shows the work; the plain call returns the finished fields,
-      // already split into the panes this form has.
-      const response = await fetch('/v1/assistant/write', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: payload,
-      });
-      const body = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(body?.error || String(response.status));
+      if (!body) throw new Error(t('assistantNoAnswer'));
       if (typeof body?.lyrics === 'string') setLyrics(body.lyrics);
       if (typeof body?.global_metadata === 'string') setGlobalMetadata(body.global_metadata);
       if (typeof body?.vocal_details === 'string') setVocalDetails(body.vocal_details);
@@ -597,6 +595,61 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
     setError(null);
     onGenerate(buildRequest());
   };
+
+  // An agent connected over MCP reads and fills this form as the user sees it
+  const formFields: Record<string, [unknown, (value: string) => void]> = {
+    title: [name, setName],
+    global_metadata: [globalMetadata, setGlobalMetadata],
+    vocal_details: [vocalDetails, setVocalDetails],
+    arrangement: [arrangement, setArrangement],
+    lyrics: [lyrics, setLyrics],
+    duration_seconds: [duration, setDuration],
+    steps: [steps, setSteps],
+    lm_seed: [lmSeed, setLmSeed],
+    lm_cfg: [lmCfg, setLmCfg],
+    lm_top_k: [lmTopK, setLmTopK],
+    dit_cfg: [ditCfg, setDitCfg],
+    synth_batch_size: [synthBatch, setSynthBatch],
+    seed: [seed, setSeed],
+    audio_codes: [audioCodes, setAudioCodes],
+    cover_prompt: [coverPrompt, setCoverPrompt],
+    output_format: [format, (value) => setFormat(value as Music3Request['output_format'])],
+    mp3_bitrate: [mp3Bitrate, setMp3Bitrate],
+    peak_clip: [peakClip, setPeakClip],
+  };
+  useBridgeCommand('create_get', () => ({
+    mode,
+    fields: { ...Object.fromEntries(Object.entries(formFields).map(([key, [value]]) => [key, value])), instrumental, randomize_seed: randomizeSeed, adapters },
+    request: buildRequest(),
+    ready,
+    error,
+    assistant_writing: assisting,
+  }));
+  useBridgeCommand('create_set', (args) => {
+    const fields = (args.fields && typeof args.fields === 'object' ? args.fields : args) as Record<string, unknown>;
+    const unknown: string[] = [];
+    for (const [key, value] of Object.entries(fields)) {
+      if (key === 'mode' && (value === 'studio' || value === 'simple')) setMode(value);
+      else if (key === 'caption' && typeof value === 'string') {
+        // a whole caption goes into its three parts by their headings
+        const parts = splitCaption(value);
+        setGlobalMetadata(parts.globalMetadata);
+        setVocalDetails(parts.vocalDetails);
+        setArrangement(parts.arrangement);
+      }
+      else if (key === 'instrumental') setInstrumental(Boolean(value));
+      else if (key === 'randomize_seed') setRandomizeSeed(Boolean(value));
+      else if (key === 'adapters' && Array.isArray(value)) setAdapters(value as AdapterUse[]);
+      else if (formFields[key]) formFields[key][1](value == null ? '' : String(value));
+      else unknown.push(key);
+    }
+    if (unknown.length) throw new Error(`Unknown fields: ${unknown.join(', ')}. The form has: ${[...Object.keys(formFields), 'caption', 'mode', 'instrumental', 'randomize_seed', 'adapters'].join(', ')}.`);
+    return { text: 'Filled in; create_form_get shows the form, ui_screenshot shows it on screen.' };
+  });
+  useBridgeCommand('create_submit', () => {
+    submit();
+    return { text: 'Pressed Create. studio_status shows the new job; if the form refused, create_form_get says why under error.' };
+  });
 
   const totalTracks = numberOrUndefined(synthBatch) ?? 1;
   const roles: Array<{ key: string; label: string; options: string[] }> = [

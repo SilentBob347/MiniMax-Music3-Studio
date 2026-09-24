@@ -33,6 +33,19 @@ request that produced it — in a local library.
 One executable. No Python, no Node.js, no launcher script, nothing phoning home unless you
 ask it to.
 
+## For AI agents
+
+Given this repository, an agent can set everything up and drive the studio by itself:
+
+1. Install the studio from the [latest release](https://github.com/timoncool/MiniMax-Music3-Studio/releases/latest) and start it.
+2. Connect to its MCP server at `http://127.0.0.1:8765/mcp`:
+   `claude mcp add --transport http minimax-studio http://127.0.0.1:8765/mcp`
+3. Read the skill it serves (resource `studio://skill`, prompt `studio`), the same text as
+   [docs/mcp-skill.md](docs/mcp-skill.md), and start with the tool `studio_status`.
+
+[llms.txt](llms.txt) says the same for tools that look for it. To keep the skill in Claude
+Code, save [docs/mcp-skill.md](docs/mcp-skill.md) as `~/.claude/skills/minimax-music3-studio/SKILL.md`.
+
 ## What you can do
 
 - **Generate music locally** with the complete Music3 component set: caption, lyrics,
@@ -135,9 +148,13 @@ While the studio is open it serves MCP at `http://127.0.0.1:8765/mcp`: an agent 
 Claude Code, Claude Desktop or Cursor does everything the page does, through the same code -
 songs, the library, covers, stems, karaoke, processing, video clips, the player, LoRA, and a
 LoRA from a folder of songs end to end - and sees and works the window itself: a
-screenshot, its controls, clicks and typing. 143 tools, grouped by area. MiniMax's own
+screenshot, its controls, clicks and typing. 150 tools, grouped by area. MiniMax's own
 caption rules and reference captions come with the server, so the agent writes the
 captions, lyrics and lyric layouts itself instead of the studio's small assistant.
+
+With **Agent (MCP)** chosen as the writing assistant (Settings, Models), the connected agent
+also answers the studio's own write buttons and dataset preparation. Settings, **Agent
+(MCP)** shows whether an agent is connected and what to paste into the client.
 
 ```bash
 claude mcp add --transport http minimax-studio http://127.0.0.1:8765/mcp
