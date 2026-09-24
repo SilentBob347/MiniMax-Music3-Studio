@@ -3,6 +3,51 @@
 What changed, newest first. Dates are release dates; the studio is versioned by its
 Windows build.
 
+## 2026-09-24 — 1.6.0
+
+### Added
+
+- **LoRA.** A LoRA page with the installed files, a catalogue of ready sliders by ntc-ai
+  and a search on Hugging Face that downloads what you pick. In the create form each LoRA
+  gets its own strength for the language model (the composition) and for the DiT (the
+  sound), and its trigger word goes into the caption for you. The engine merges LoRA and
+  LoKr into either half at load and reads PEFT, LyCORIS, diffusers and ComfyUI files
+  (minimaxmusic.cpp fork `adapters`, 5922db4), with the rsLoRA scale honoured.
+- **Training your own LoRA.** An optional tab on the LoRA page. 5–20 songs of one artist
+  or style become a language-model LoRA on your card with HOT-Step's `mm3-lm-train` and
+  its HOT-PiZZA recipe: rank 128, AdamW at 8e-5 with warm-up, a 1536-frame window that
+  fits a 24 GB card, the depth decoder's acoustic loss, a checkpoint every 100 steps.
+  Every setting is editable under Advanced, with the defaults one click away. The
+  assistant writes each song's caption by ear, in MiniMax's own structure, and each
+  checkpoint goes into the LoRA library in one click. The trainer and its weights (about
+  10.5 GB) download only when you open training; it needs an RTX 30-series card or newer
+  with 22 GB of VRAM.
+- **Datasets travel between studios.** A dataset is a folder with `dataset.json` and its
+  audio; import one from YuE2 Studio or show the folder to take it there.
+- **Audio processing.** Noise reduction, the Spectral Lifter, a vocal naturaliser, your own
+  VST3 plugins in a chain, and mastering to a reference track, from a track's menu or the
+  Tools page. Plugins are found in the system VST3 folders, each is set up in its own
+  window, and they run in a host process of their own, so a plugin that crashes does not
+  take the studio with it. Compare before and after while it plays; keep the result as a
+  version of the track, next to the untouched original, or throw it away.
+
+### Changed
+
+- **MP3 is made by the studio.** The engine renders 32-bit float and the studio encodes
+  the MP3 with LAME at 320 kbps, so nothing is lost before the encoder.
+- **Fewer DiT steps keep their detail.** Below 30 steps the engine raises the flow shift
+  by itself, to `29/(steps-1)`.
+
+### Fixed
+
+- **The Light and Minimal model sets make songs.** Their lighter files come from a second
+  community set written in llama.cpp's naming, with the DiT's q, k and v in one matrix, and
+  the engine read only the original naming: it stopped on the first tensor, and the
+  language model of those sets was not even recognised. The engine now reads both layouts
+  as the same weights; a render on the Light DiT matches the Q8_0 one to 0.985.
+- **Clearing the create form, resetting its parameters and opening a saved prompt work
+  again.** Each of them stopped the form on a setting that had been removed.
+
 ## 2026-09-24 — 1.5.2
 
 ### Changed
