@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { Activity, useState, useEffect, useRef, useCallback } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { CreatePanel } from './components/CreatePanel';
 import { SongList } from './components/SongList';
@@ -1240,8 +1240,14 @@ function AppContent() {
   }, []);
 
   // Render Layout Logic
-  const renderContent = () => {
-    switch (currentView) {
+  // The create page stays mounted once the engine is up, hidden while another
+  // page shows: leaving it for the library used to throw away the style, the
+  // lyrics, the score and every setting typed into it.
+  const createKept = nativeModels !== 'offline' && nativeSetupReady;
+  const showingCreate = !['tools', 'adapters', 'library', 'playlist', 'search', 'news'].includes(currentView);
+
+  const renderContent = (view: typeof currentView = currentView) => {
+    switch (view) {
       case 'tools':
         return <StudioToolsPanel initialSongId={stemsSongId} />;
 
@@ -1439,7 +1445,8 @@ function AppContent() {
         />
 
         <main className="relative ml-[72px] flex min-h-0 min-w-0 flex-1 overflow-hidden md:ml-0">
-          {renderContent()}
+          {createKept && <Activity mode={showingCreate ? 'visible' : 'hidden'}>{renderContent('create')}</Activity>}
+          {!(createKept && showingCreate) && renderContent()}
         </main>
       </div>
 
