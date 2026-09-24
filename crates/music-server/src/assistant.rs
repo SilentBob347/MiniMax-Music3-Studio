@@ -40,6 +40,7 @@ const LYRICS_RULES: &str = r#"lyrics: singable lyrics using ONLY these section t
 
 /// Pronunciation, which the caption cannot reach: the engine reads the lyrics
 /// as characters, so the only place to correct a mis-sung word is the word.
+
 const DICTION_RULE: &str = r#"
 Diction: the model sings the letters it is given. In Russian write ё as ё rather than е, and mark the stressed vowel with a combining acute - за́мок, замо́к - only where the word would otherwise be read wrong: homographs, rare words, proper names, and a word whose natural stress fights the beat. Never accent every word; a page of accents reads as noise. In other languages do the same locally - respell or transcribe only the individual words that come out wrong, and leave the rest alone."#;
 
@@ -69,6 +70,8 @@ pub enum AssistTarget {
     Prompt,
     /// Lay out a recording's recognised words as a lyric sheet.
     Transcript,
+    /// Lay out a published lyric sheet in sections, its words untouched.
+    Sheet,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -150,6 +153,8 @@ pub fn instructions(request: &AssistRequest) -> (String, &'static [&'static str]
             ),
             &["lyrics"],
         ),
+        // a sheet asks for boundaries only; see `sheet_in_sections`
+        AssistTarget::Sheet => (SHEET_SECTIONS_PROMPT.to_string(), &["sections"]),
         AssistTarget::All => (
             format!(
                 "You write inputs for MiniMax Music 3, a lyrics+description music generation model.\n\
@@ -250,6 +255,7 @@ pub fn user_message(request: &AssistRequest) -> String {
             request.duration_seconds.round() as i64,
         ),
         AssistTarget::Transcript => format!("Transcript:\n{description}"),
+        AssistTarget::Sheet => format!("Lyric sheet:\n{description}"),
         AssistTarget::Prompt => format!(
             "Sound instruction: {}\nCurrent lyrics, keep the structured prompt coherent with them:\n{}{instrumental}",
             if brief.is_empty() { "(none — describe a sound that fits the lyrics)" } else { brief },
@@ -437,7 +443,9 @@ pub fn chat_body_constrained(
         body["reasoning"] = serde_json::json!({ "effort": effort, "exclude": true });
     }
     if let Some(schema) = schema {
-        body["response_format"] = serde_json::json!({ "type": "json_schema", "schema": schema });
+        // llama-server reads the schema from `json_schema.schema`, the OpenAI
+        // shape; beside `type` it is ignored and any JSON object passes
+        body["response_format"] = serde_json::json!({ "type": "json_schema", "json_schema": { "name": "answer", "strict": true, "schema": schema } });
     }
 
     body
@@ -471,7 +479,7 @@ pub fn content_of(response: &Value) -> Result<String> {
 /// bounded by what the task can need, so a model looping on one line fails in
 /// seconds instead of at the request timeout.
 pub fn fit_to_task(mut body: Value, target: AssistTarget) -> Value {
-    if target == AssistTarget::Transcript {
+    if matches!(target, AssistTarget::Transcript | AssistTarget::Sheet) {
         body["temperature"] = Value::from(0.2);
         body["max_tokens"] = Value::from(4096);
     }
@@ -481,6 +489,117 @@ pub fn fit_to_task(mut body: Value, target: AssistTarget) -> Value {
         body["max_tokens"] = Value::from(2048);
     }
     body
+}
+
+/// A Cyrillic word with Latin look-alikes in it ("Tут", "oстов"), which a
+/// small model writes at the start of a line, spelled in Cyrillic. Only the
+/// letters that are one letter both by sight and by sound are swapped: a
+/// Latin H stands for Н as often as for Х, and is left for the eye.
+pub fn cyrillic_homoglyphs(text: &str) -> String {
+    let swap = |c: char| match c {
+        'A' => 'А', 'C' => 'С', 'E' => 'Е', 'K' => 'К', 'M' => 'М', 'O' => 'О', 'P' => 'Р', 'T' => 'Т', 'X' => 'Х',
+        'a' => 'а', 'c' => 'с', 'e' => 'е', 'o' => 'о', 'p' => 'р', 'x' => 'х', 'y' => 'у',
+        other => other,
+    };
+    let cyrillic = |c: char| ('\u{0400}'..='\u{04FF}').contains(&c);
+    let mut out = String::with_capacity(text.len());
+    let mut word = String::new();
+    let flush = |word: &mut String, out: &mut String| {
+        if word.chars().any(cyrillic) && word.chars().any(|c| c.is_ascii_alphabetic()) {
+            out.extend(word.chars().map(swap));
+        } else {
+            out.push_str(word);
+        }
+        word.clear();
+    };
+    for c in text.chars() {
+        if c.is_alphabetic() {
+            word.push(c);
+        } else {
+            flush(&mut word, &mut out);
+            out.push(c);
+        }
+    }
+    flush(&mut word, &mut out);
+    out
+}
+
+/// A published sheet is laid out by asking for its section boundaries only:
+/// its lines go in numbered and what comes back is where each section starts
+/// and what it is. The studio puts the sheet's own lines under the tags, so no
+/// word can be changed, dropped or merged, whatever the model.
+pub const SHEET_SECTIONS_PROMPT: &str = r#"You mark the sections of a published lyric sheet. Its lines are numbered. Do not rewrite anything; answer only which lines form each section, in order. A block of lines that returns is a chorus, every time it is sung; the blocks between choruses are verses; a block sung once that is neither is a bridge; a block that leads into the chorus every time is a pre-chorus; lines before the first verse are the intro and after the last chorus the outro. Every line belongs to exactly one section: the first section starts at line 1, each next one starts right after the previous one ends, and the last ends at the last line.
+Answer with ONLY a JSON object: {"sections": [{"kind": "verse", "from": 1, "to": 4}, {"kind": "chorus", "from": 5, "to": 8}]}, where kind is one of intro, verse, pre-chorus, chorus, bridge, outro."#;
+
+const SECTION_KINDS: [&str; 6] = ["intro", "verse", "pre-chorus", "chorus", "bridge", "outro"];
+
+/// The sheet's lines as the model reads them: "1. first line".
+pub fn numbered_lines(lines: &[&str]) -> String {
+    lines.iter().enumerate().map(|(index, line)| format!("{}. {line}", index + 1)).collect::<Vec<_>>().join("\n")
+}
+
+/// The answer the model is held to when it runs locally.
+pub fn sheet_sections_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "sections": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "kind": { "type": "string", "enum": SECTION_KINDS },
+                        "from": { "type": "integer", "minimum": 1 },
+                        "to": { "type": "integer", "minimum": 1 },
+                    },
+                    "required": ["kind", "from", "to"],
+                },
+            },
+        },
+        "required": ["sections"],
+    })
+}
+
+/// The sheet in sections from where the model says each one starts: a
+/// section runs to the line before the next one, so every line is kept once,
+/// in order, gaps and overlaps in the answer notwithstanding. None when the
+/// answer marks no section.
+pub fn sheet_in_sections(answer: &str, lines: &[&str]) -> Option<String> {
+    let value: Value = serde_json::from_str(answer.get(answer.find('{')?..=answer.rfind('}')?)?).ok()?;
+    let mut starts: Vec<(usize, String)> = value
+        .get("sections")?
+        .as_array()?
+        .iter()
+        .filter_map(|section| {
+            let kind = section.get("kind")?.as_str()?.trim().to_lowercase();
+            let from = section.get("from")?.as_u64()? as usize;
+            Some((from, if SECTION_KINDS.contains(&kind.as_str()) { kind } else { "verse".to_string() }))
+        })
+        .filter(|(from, _)| *from >= 1 && *from <= lines.len())
+        .collect();
+    starts.sort_by_key(|(from, _)| *from);
+    starts.dedup_by_key(|(from, _)| *from);
+    let first = starts.first_mut()?;
+    first.0 = 1;
+    let mut verse = 0;
+    let blocks: Vec<String> = starts
+        .iter()
+        .enumerate()
+        .map(|(index, (from, kind))| {
+            let to = starts.get(index + 1).map_or(lines.len(), |(next, _)| next - 1);
+            if kind == "verse" {
+                verse += 1;
+            }
+            format!("[{}]\n{}", section_tag(kind, verse), lines[from - 1..to].join("\n"))
+        })
+        .collect();
+    Some(blocks.join("\n\n"))
+}
+
+/// MiniMax's tags: lowercase, verses unnumbered.
+fn section_tag(kind: &str, _verse: usize) -> String {
+    kind.to_string()
 }
 
 /// The share of letters in a text that are Cyrillic, to tell a lyric sheet
@@ -561,6 +680,13 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_sheet_is_cut_where_the_sections_start() {
+        let lines = ["Шёл я как-то по лесу,", "Шёл по грибы", "И тут раз", "Конец"];
+        let answer = r#"{"sections": [{"kind": "verse", "from": 1, "to": 2}, {"kind": "Chorus", "from": 3, "to": 3}, {"kind": "coda", "from": 4, "to": 4}]}"#;
+        assert_eq!(sheet_in_sections(answer, &lines).as_deref(), Some("[verse]\nШёл я как-то по лесу,\nШёл по грибы\n\n[chorus]\nИ тут раз\n\n[verse]\nКонец"));
+    }
 
     /// The published rules must reach the model itself, whichever provider is
     /// answering: the same system message is what `chat_body` sends to a local

@@ -59,6 +59,10 @@ pub fn training_file_url(file: &TrainingFile) -> String {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Recipe {
+    /// `steps`: train `steps`; `epochs`: train `epochs` passes over the songs.
+    pub stop: String,
+    /// One epoch is one pass over the dataset: a step trains one song.
+    pub epochs: u32,
     pub steps: u32,
     pub save_every: u32,
     pub seed: u32,
@@ -86,6 +90,8 @@ pub struct Recipe {
 impl Default for Recipe {
     fn default() -> Self {
         Self {
+            stop: "steps".into(),
+            epochs: 40,
             steps: 600,
             save_every: 100,
             seed: 42,
@@ -104,8 +110,24 @@ impl Default for Recipe {
 }
 
 impl Recipe {
+    /// The recipe the trainer runs for a dataset of `songs`: by epochs, the
+    /// steps are the epochs times the songs.
+    pub fn for_songs(&self, songs: usize) -> Recipe {
+        let mut recipe = self.clone();
+        if recipe.stop == "epochs" {
+            recipe.steps = recipe.epochs.saturating_mul(songs.max(1) as u32);
+        }
+        recipe
+    }
+
     /// Refuses what the trainer would refuse, before any stage starts.
     pub fn check(&self) -> Result<(), String> {
+        if self.epochs == 0 {
+            return Err("epochs must be at least 1".into());
+        }
+        if !matches!(self.stop.as_str(), "steps" | "epochs") {
+            return Err(format!("unknown stopping rule {}", self.stop));
+        }
         if self.steps == 0 || self.save_every == 0 {
             return Err("steps and the checkpoint interval must be at least 1".into());
         }
@@ -187,7 +209,9 @@ const fn choice(key: &'static str, group: &'static str, choices: &'static [&'sta
 /// The settings of a MiniMax Music 3 run, in the order the page shows them.
 pub fn recipe_fields() -> Vec<RecipeField> {
     vec![
-        integer("steps", "stop", 1.0, 5000.0, 50.0),
+        choice("stop", "stop", &["steps", "epochs"]),
+        RecipeField { shown_when: Some(FieldCondition { field: "stop", values: &["steps"] }), ..integer("steps", "stop", 1.0, 5000.0, 50.0) },
+        RecipeField { shown_when: Some(FieldCondition { field: "stop", values: &["epochs"] }), ..integer("epochs", "stop", 1.0, 500.0, 1.0) },
         integer("save_every", "stop", 1.0, 1000.0, 10.0),
         integer("seed", "stop", 0.0, 4_294_967_295.0, 1.0),
         choice("method", "adapter", &["hot_pizza", "pissa", "lora"]),
@@ -385,6 +409,13 @@ pub fn caption_with_trigger(caption: &str, trigger: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn epochs_become_steps() {
+        let by_epochs = Recipe { stop: "epochs".into(), epochs: 40, ..Recipe::default() }.for_songs(13);
+        assert_eq!(by_epochs.steps, 520);
+        assert_eq!(Recipe::default().for_songs(13).steps, 600);
+    }
 
     #[test]
     fn a_step_line_becomes_a_step_and_other_lines_do_not() {

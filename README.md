@@ -67,11 +67,29 @@ ask it to.
   sound), each with its own strength, picked in the create form. The engine reads PEFT,
   LyCORIS, diffusers and ComfyUI files. A catalogue of ready ones with their authors
   credited, and a search on Hugging Face that downloads what you pick.
-- **Train your own LoRA** — an optional tab on the LoRA page: 5–20 songs of one artist or
+- **Train your own LoRA** — an optional tab on the LoRA page: songs of one artist or
   style become a language-model LoRA on your own card, with HOT-Step's `mm3-lm-train` and
-  its HOT-PiZZA recipe. Every setting is editable. The assistant writes each song's caption
-  by ear, datasets move between this studio and YuE2 Studio as a folder, and each saved
-  checkpoint goes into the LoRA library in one click.
+  its HOT-PiZZA recipe. Every setting is editable. Datasets move between this studio and
+  YuE2 Studio as a folder, and each saved checkpoint goes into the LoRA library in one
+  click.
+  - **A three-step wizard** — drop a folder of songs, check them, train. Albums with a
+    cue sheet are cut into songs; titles and artists come from the tags, the file name and
+    the folders.
+  - **Preparation on its own** — lyrics come from the lyric databases players use (LRCLIB,
+    QQ Music, Kugou), word for word; only a song none of them knows has its vocals
+    separated and is heard by Whisper, with its usual hallucinations filtered out. The
+    assistant lays the lyrics out in sections. MOSS-Music listens to every song and writes
+    its structured caption, with the tempo and key measured on the card by Beat This! and
+    S-KEY.
+  - **Every song shows where it is** — lyrics and captions appear as each song is done,
+    one model on the card at a time, each loaded once for the whole batch. A song that
+    failed or was stopped has a button that finishes just that song.
+  - **Picks up after a restart** — each song keeps what it has; a preparation cut off by a
+    crash or a restart carries on by itself and redoes nothing.
+  - **Stop by steps or by epochs** — a fixed number of steps, or a number of passes over
+    the songs.
+  - **A trigger word from the start** — every dataset gets a rare word made from its name,
+    which you can change.
 - **Audio processing** — noise reduction, the Spectral Lifter, a vocal naturaliser, your
   own VST3 plugins in a chain, and mastering to a reference track. Compare before and
   after while it plays, then keep the result as a version of the track or throw it away.
@@ -107,7 +125,9 @@ every one of those architectures, so nothing is left for the driver to compile.
 
 Training a LoRA is optional and needs an NVIDIA RTX 30-series card or newer with 22 GB of
 VRAM (an RTX 3090, 4090 or 5090) and about 10.5 GB more disk for the trainer and its
-weights, downloaded only when you open training.
+weights, downloaded only when you open training. Describing songs by ear needs about
+12 GB of VRAM and 10 GB more disk for MOSS-Music; without it the captions are written by
+hand.
 
 ## Models
 
@@ -193,6 +213,56 @@ manual placement or for building a custom mix role-by-role in the model manager.
 | --- | --- | --- | --- |
 | [`MiniMax-Music3-condition_encoder-F32.gguf`](https://huggingface.co/Serveurperso/MiniMax-Music3-GGUF/resolve/9cdffedb54de2509ae55a6831a677645fb353a7d/MiniMax-Music3-condition_encoder-F32.gguf) | 101 MB | every profile | Serveurperso |
 | [`MiniMax-Music3-vocoder-F32.gguf`](https://huggingface.co/Serveurperso/MiniMax-Music3-GGUF/resolve/9cdffedb54de2509ae55a6831a677645fb353a7d/MiniMax-Music3-vocoder-F32.gguf) | 306 MB | every profile | Serveurperso |
+
+</details>
+
+### Everything else the studio downloads
+
+Each part is downloaded when you first use it, and each file can be downloaded by hand
+and put into the studio's data folder — `<the folder you unzipped>\data\` for the
+portable build, `%LOCALAPPDATA%\MiniMax Music3 Studio\` for the installed one. A file with
+the exact name in the listed folder is recognised and not downloaded again.
+
+<details>
+<summary><b>Training, listening, lyrics, stems and the assistant — direct links</b></summary>
+
+**Training a LoRA** — [scragnog/MiniMax-Music3-GGUF](https://huggingface.co/scragnog/MiniMax-Music3-GGUF), pinned to `3bc27a9`
+
+| File | What for | Size | Put in the data folder |
+| --- | --- | --- | --- |
+| [`mm3-lm-q8_0.gguf`](https://huggingface.co/scragnog/MiniMax-Music3-GGUF/resolve/3bc27a90ab1b182a692744f46be18385098293c7/mm3-lm-q8_0.gguf) | the language model the LoRA is trained on | 9.13 GB | `training\models\` |
+| [`mm3-depth-f16.gguf`](https://huggingface.co/scragnog/MiniMax-Music3-GGUF/resolve/3bc27a90ab1b182a692744f46be18385098293c7/mm3-depth-f16.gguf) | depth decoder, the acoustic loss | 1.29 GB | `training\models\` |
+| [`mm3-rvq-53kpooled-f32.gguf`](https://huggingface.co/scragnog/MiniMax-Music3-GGUF/resolve/3bc27a90ab1b182a692744f46be18385098293c7/mm3-rvq-53kpooled-f32.gguf) | RVQ encoder | 676 MB | `training\models\` |
+| [`mm3-enc-f16.gguf`](https://huggingface.co/scragnog/MiniMax-Music3-GGUF/resolve/3bc27a90ab1b182a692744f46be18385098293c7/mm3-enc-f16.gguf) | audio encoder | 89 MB | `training\models\` |
+
+**Describing songs by ear** (optional)
+
+| File | What for | Size | Put in the data folder |
+| --- | --- | --- | --- |
+| [`moss-aud-f16.gguf`](https://huggingface.co/scragnog/MOSS-Music-8B-Instruct-GGUF/resolve/main/moss-aud-f16.gguf) | MOSS-Music-8B, the ear | 1.61 GB | `training\models\moss\` |
+| [`moss-lm-q8_0.gguf`](https://huggingface.co/scragnog/MOSS-Music-8B-Instruct-GGUF/resolve/main/moss-lm-q8_0.gguf) | MOSS-Music-8B, the words | 8.11 GB | `training\models\moss\` |
+| [`beat_this.onnx`](https://github.com/mosynthkey/beat_this_cpp/raw/main/onnx/beat_this.onnx) | Beat This!, the tempo | 79 MB | `training\models\audio-facts\` |
+| [`skey.onnx`](https://huggingface.co/aaatmy/skey-onnx/resolve/main/skey.onnx) | S-KEY, the key | 0.3 MB | `training\models\audio-facts\` |
+
+**Lyrics by ear** — only for songs no lyric database knows; pick one recogniser
+
+| Files | What for | Size | Put in the data folder |
+| --- | --- | --- | --- |
+| [faster-whisper-large-v3](https://huggingface.co/Systran/faster-whisper-large-v3/tree/main): `config.json`, `model.bin`, `preprocessor_config.json`, `tokenizer.json`, `vocabulary.json` | Whisper large-v3 | 2.9 GB | `karaoke\models\whisper\faster-whisper-large-v3\` |
+| [parakeet-tdt-0.6b-v3-onnx](https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/tree/main): `config.json`, `encoder-model.int8.onnx`, `decoder_joint-model.int8.onnx`, `nemo128.onnx`, `vocab.txt` | Parakeet, European languages | 0.7 GB | `karaoke\models\parakeet\` |
+
+**Stems and vocals for recognition**
+
+| File | What for | Size | Put in the data folder |
+| --- | --- | --- | --- |
+| [`htdemucs_6s_fp16weights.onnx`](https://huggingface.co/StemSplitio/htdemucs-6s-onnx/resolve/49df9b6989cf2150840ea65b0bef77a2e471b678/htdemucs_6s_fp16weights.onnx) | HT-Demucs, six stems | 130 MB | `separation\models\htdemucs\htdemucs_6s_fp16.onnx` (this name) |
+
+**The writing assistant** — one of
+
+| File | Size | Put in the data folder |
+| --- | --- | --- |
+| [`gemma-4-E4B_q4_0-it.gguf`](https://huggingface.co/google/gemma-4-E4B-it-qat-q4_0-gguf/resolve/main/gemma-4-E4B_q4_0-it.gguf) | 4.80 GB | `assistant\models\` |
+| [`gemma-4-12b-it-qat-q4_0.gguf`](https://huggingface.co/google/gemma-4-12b-it-qat-q4_0-gguf/resolve/main/gemma-4-12b-it-qat-q4_0.gguf) | 6.50 GB | `assistant\models\` |
 
 </details>
 
