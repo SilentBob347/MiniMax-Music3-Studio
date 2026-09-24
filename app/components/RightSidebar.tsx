@@ -11,6 +11,7 @@ import { SongDropdownMenu } from './SongDropdownMenu';
 import { AlbumCover } from './AlbumCover';
 import { openStems } from '../services/openStems';
 import { downloadSongAudio } from '../services/songDownload';
+import { localized, useAdapterLibrary, usesFromSettings } from '../services/adapters';
 
 interface RightSidebarProps {
     song: Song | null;
@@ -142,7 +143,8 @@ const KaraokeAction: React.FC<{ song: Song; onDone?: (lrc: string) => void }> = 
 
 export const RightSidebar: React.FC<RightSidebarProps> = ({ song, onClose, onOpenCoverRegen, onReuse, onReplayMusic, onSongUpdate, onNavigateToProfile, onNavigateToSong, isLiked, onToggleLike, onDelete, onAddToPlaylist, onPlay, isPlaying, currentSong }) => {
     const { user } = useAuth();
-    const { t } = useI18n();
+    const { t, language } = useI18n();
+    const adapterLibrary = useAdapterLibrary();
     const [showMenu, setShowMenu] = useState(false);
     const [isOwner, setIsOwner] = useState(false);
     const [tagsExpanded, setTagsExpanded] = useState(false);
@@ -613,36 +615,36 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({ song, onClose, onOpe
                         </div>
                     </div>
 
-                    {/* Generation Parameters Accordion */}
+                    {/* Generation parameters, as the engine recorded them. */}
                     {(() => {
-                        const p = song.generationParams || {};
-                        const hasParams = song.bpm || song.keyScale || song.ditModel || p.inferenceSteps;
-                        if (!hasParams) return null;
-
+                        const p = (song.generationParams || {}) as Record<string, any>;
+                        if (!song.generationParams) return null;
                         const paramRows: [string, string | number | undefined][] = [
-                            ['Model', song.ditModel?.replace('acestep-v15-', '')],
-                            ['LM', song.lmModel ? `${song.lmModel.replace('acestep-5Hz-lm-', '')} (${song.lmBackend || 'pt'})` : undefined],
-                            ['BPM', song.bpm && song.bpm > 0 ? song.bpm : undefined],
-                            ['Key', song.keyScale],
-                            ['Time', song.timeSignature],
-                            ['Duration', song.duration && song.duration !== '0:00' ? song.duration : undefined],
-                            ['Steps', p.inferenceSteps],
-                            ['Guidance', p.guidanceScale != null ? p.guidanceScale : undefined],
-                            ['Sampler', p.samplerMode],
-                            ['Scheduler', p.schedulerType],
-                            ['Method', p.inferMethod?.toUpperCase()],
-                            ['Shift', p.shift],
-                            ['Seed', p.seed],
-                            ['Thinking', p.thinking ? 'ON' : undefined],
-                            ['ADG', p.useAdg ? 'ON' : undefined],
-                            ['CFG Interval', p.cfgIntervalStart != null && p.cfgIntervalEnd != null && (p.cfgIntervalStart > 0 || p.cfgIntervalEnd < 1) ? `${p.cfgIntervalStart}–${p.cfgIntervalEnd}` : undefined],
-                            ['Vel. Clamp', p.velocityNormThreshold > 0 ? p.velocityNormThreshold : undefined],
-                            ['Vel. EMA', p.velocityEmaFactor > 0 ? p.velocityEmaFactor : undefined],
-                            [t('coverStrength'), p.audioCoverStrength != null && p.audioCoverStrength < 1 ? p.audioCoverStrength : undefined],
-                            ['Task', p.taskType && p.taskType !== 'text2music' ? p.taskType : undefined],
-                            ['Format', p.audioFormat?.toUpperCase()],
+                            [t('profile'), song.lmModel || undefined],
+                            [t('maxDuration'), song.duration && song.duration !== '0:00' ? song.duration : undefined],
+                            [t('ditSteps'), p.steps],
+                            [`LM ${t('cfgScale')}`, typeof p.lm_cfg === 'number' ? p.lm_cfg : undefined],
+                            [t('topK'), p.lm_top_k],
+                            [`DiT ${t('cfgScale')}`, typeof p.dit_cfg === 'number' ? p.dit_cfg : undefined],
+                            [t('lmSeedShort'), p.lm_seed],
+                            [t('seedShort'), p.seed],
+                            [t('outputFormat'), typeof p.output_format === 'string' ? p.output_format.toUpperCase() : undefined],
+                            [t('mp3Bitrate'), p.output_format === 'mp3' && p.mp3_bitrate ? `${p.mp3_bitrate} kbps` : undefined],
+                            [t('peakClipLabel'), p.peak_clip],
                             [t('genTime'), song.generationTime ? `${song.generationTime.toFixed(1)}s` : undefined],
                         ];
+                        // The LoRA the song was made with, each with its strength per part of the model.
+                        const uses = usesFromSettings(p);
+                        const tr = t as unknown as (key: string) => string;
+                        uses.forEach((use, index) => {
+                            const adapter = adapterLibrary.installed.find(entry => entry.id === use.id);
+                            const strengths = Object.entries(use.scales).map(([slot, scale]) => {
+                                const role = adapterLibrary.slots.find(entry => entry.id === slot)?.role;
+                                return `${role ? tr(`adapterRole_${role}`) : slot} ${scale.toFixed(2)}`;
+                            });
+                            const name = adapter ? localized(adapter.name, language) : use.id;
+                            paramRows.push([uses.length > 1 ? `LoRA ${index + 1}` : 'LoRA', [name, ...strengths].join(' · ')]);
+                        });
                         const visibleRows = paramRows.filter(([, v]) => v !== undefined && v !== null && v !== '');
 
                         const copyText = visibleRows.map(([k, v]) => `${k}: ${v}`).join('\n');
@@ -651,25 +653,12 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({ song, onClose, onOpe
                             <details className="group">
                                 <summary className="flex items-center justify-between cursor-pointer px-3 py-2 rounded-xl bg-zinc-100 dark:bg-white/5 hover:bg-zinc-200 dark:hover:bg-white/10 transition-colors">
                                     <div className="flex flex-wrap gap-1.5 flex-1 min-w-0">
-                                        {song.ditModel && (
-                                            <span className="text-[11px] px-2 py-0.5 rounded bg-zinc-200 dark:bg-white/10 text-zinc-700 dark:text-zinc-300 font-medium">
-                                                {song.ditModel.replace('acestep-v15-', '')}
-                                            </span>
+                                        <span className="text-[11px] px-2 py-0.5 rounded bg-zinc-200 dark:bg-white/10 text-zinc-700 dark:text-zinc-300 font-medium">MiniMax Music 3</span>
+                                        {p.steps && (
+                                            <span className="text-[11px] px-2 py-0.5 rounded bg-zinc-200 dark:bg-white/10 text-zinc-600 dark:text-zinc-400">{p.steps}st</span>
                                         )}
-                                        {p.inferenceSteps && (
-                                            <span className="text-[11px] px-2 py-0.5 rounded bg-zinc-200 dark:bg-white/10 text-zinc-600 dark:text-zinc-400">
-                                                {p.inferenceSteps}st
-                                            </span>
-                                        )}
-                                        {p.samplerMode && p.samplerMode !== 'euler' && (
-                                            <span className="text-[11px] px-2 py-0.5 rounded bg-zinc-200 dark:bg-white/10 text-zinc-700 dark:text-zinc-300">
-                                                {p.samplerMode}
-                                            </span>
-                                        )}
-                                        {p.schedulerType && p.schedulerType !== 'linear' && (
-                                            <span className="text-[11px] px-2 py-0.5 rounded bg-zinc-200 dark:bg-white/10 text-zinc-700 dark:text-zinc-300">
-                                                {p.schedulerType}
-                                            </span>
+                                        {uses.length > 0 && (
+                                            <span className="text-[11px] px-2 py-0.5 rounded bg-pink-500/10 text-pink-600 dark:text-pink-300 font-medium">LoRA ×{uses.length}</span>
                                         )}
                                     </div>
                                     <ChevronDown size={14} className="text-zinc-400 transition-transform group-open:rotate-180 flex-shrink-0 ml-2" />

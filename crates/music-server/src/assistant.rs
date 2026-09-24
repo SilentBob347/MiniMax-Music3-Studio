@@ -54,6 +54,10 @@ Two voices: name both singers in vocal_details ("Singer A (Male), <timbre>. Sing
 const INSTRUMENTAL_RULE: &str = r#"
 Instrumental: state in vocal_details that the piece is instrumental with no sung words, no wordless or sampled vocals and no choir, and name the instrument carrying the lead melodic line in every section that would otherwise have carried a vocal."#;
 
+/// How a recognised recording becomes a lyric sheet: the words stay the
+/// singer's, only the layout is the assistant's.
+const TRANSCRIPT_RULES: &str = r#"The transcript comes from speech recognition run on the vocals of a finished recording: one line per sung phrase, each after its start time, with the recogniser's mistakes. Write the lyric sheet of that recording exactly as it is sung. Keep the singer's words, in their order, their language and their alphabet - Cyrillic stays Cyrillic, never transliterate; correct a word only where the recognition is plainly wrong and the right word is certain from the line; never invent, rewrite, translate or complete lines, and drop fragments the recogniser picked up in instrumental passages. Leave the times out. Organise the lines into sections: a block of lines that returns is the [chorus], written out every time it is sung; the blocks between choruses are the [verse]; a block sung once that is neither is the [bridge]; a block that leads into the chorus every time is the [pre-chorus]; lines before the first verse are the [intro] and after the last chorus the [outro]. Every section starts with its tag in square brackets, lowercase, in English, on a line of its own, its lines follow below it, and a blank line separates sections. Use no other tags and no section names in words."#;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AssistTarget {
@@ -63,6 +67,8 @@ pub enum AssistTarget {
     Lyrics,
     /// Rewrite only the caption, keeping it coherent with the current lyrics.
     Prompt,
+    /// Lay out a recording's recognised words as a lyric sheet.
+    Transcript,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -136,6 +142,14 @@ pub fn instructions(request: &AssistRequest) -> (String, &'static [&'static str]
             ),
             &["global_metadata", "vocal_details", "arrangement"],
         ),
+        AssistTarget::Transcript => (
+            format!(
+                "You prepare training data for MiniMax Music 3, a model that learns songs from their audio, their captions and their lyric sheets.\n\
+                 {TRANSCRIPT_RULES}\n\
+                 Answer with ONLY a JSON object with key: lyrics."
+            ),
+            &["lyrics"],
+        ),
         AssistTarget::All => (
             format!(
                 "You write inputs for MiniMax Music 3, a lyrics+description music generation model.\n\
@@ -159,7 +173,7 @@ pub fn instructions(request: &AssistRequest) -> (String, &'static [&'static str]
 /// vocal would only invite one. So each arrives when the request calls for it.
 fn craft_notes(request: &AssistRequest) -> String {
     let mut notes = String::new();
-    if request.target != AssistTarget::Prompt && !request.instrumental {
+    if matches!(request.target, AssistTarget::All | AssistTarget::Lyrics) && !request.instrumental {
         notes.push_str(DICTION_RULE);
     }
     if request.instrumental {
@@ -235,6 +249,7 @@ pub fn user_message(request: &AssistRequest) -> String {
             request.arrangement.trim(),
             request.duration_seconds.round() as i64,
         ),
+        AssistTarget::Transcript => format!("Transcript:\n{description}"),
         AssistTarget::Prompt => format!(
             "Sound instruction: {}\nCurrent lyrics, keep the structured prompt coherent with them:\n{}{instrumental}",
             if brief.is_empty() { "(none — describe a sound that fits the lyrics)" } else { brief },
@@ -449,6 +464,28 @@ pub fn content_of(response: &Value) -> Result<String> {
         }
     }
     Err(anyhow!("the assistant response contained no message content"))
+}
+
+/// Sampling fitted to the task: laying out a transcript is copying, not
+/// writing, so it runs cold whatever the model publishes.
+pub fn fit_to_task(mut body: Value, target: AssistTarget) -> Value {
+    if target == AssistTarget::Transcript {
+        body["temperature"] = Value::from(0.2);
+    }
+    body
+}
+
+/// The share of letters in a text that are Cyrillic, to tell a lyric sheet
+/// that kept its alphabet from one the model transliterated.
+pub fn cyrillic_share(text: &str) -> f64 {
+    let (mut cyrillic, mut letters) = (0usize, 0usize);
+    for c in text.chars().filter(|c| c.is_alphabetic()) {
+        letters += 1;
+        if ('\u{0400}'..='\u{04FF}').contains(&c) {
+            cyrillic += 1;
+        }
+    }
+    if letters == 0 { 0.0 } else { cyrillic as f64 / letters as f64 }
 }
 
 #[cfg(test)]

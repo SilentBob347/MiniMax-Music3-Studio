@@ -97,6 +97,8 @@ export interface Music3Request {
   mp3_bitrate: number;
   /** Library title only — never sent to the engine. */
   title?: string;
+  /** LoRA adapters for this song, each with a strength per engine slot. */
+  adapters?: { id: string; scales: Record<string, number> }[];
 }
 
 export interface Music3JobSong {
@@ -149,4 +151,4 @@ export interface UserProfile {
 }
 
 // Simplified views for ACE-Step UI
-export type View = 'create' | 'library' | 'tools' | 'playlist' | 'search' | 'news';
+export type View = 'create' | 'library' | 'tools' | 'adapters' | 'playlist' | 'search' | 'news';

@@ -63,6 +63,7 @@ import { PlaylistDetail } from './components/PlaylistDetail';
 import { Toast, ToastType } from './components/Toast';
 import { SearchPage } from './components/SearchPage';
 import { NewsPage } from './components/NewsPage';
+import { AdaptersPage } from './components/AdaptersPage';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { SetupGate } from './components/SetupGate';
 import { EngineStarting } from './components/EngineStarting';
@@ -149,12 +150,19 @@ function AppContent() {
       if (song) setSongToProcess(song);
     };
     window.addEventListener('mm3:open-stems', open);
+    // A page asked for by another page, the LoRA card sending the user to its library.
+    const navigate = (event: Event) => {
+      const view = (event as CustomEvent<View>).detail;
+      if (view) setCurrentView(view);
+    };
     window.addEventListener('mm3:open-settings', openSettings);
     window.addEventListener('mm3:process-song', process);
+    window.addEventListener('mm3:navigate', navigate);
     return () => {
       window.removeEventListener('mm3:open-stems', open);
       window.removeEventListener('mm3:open-settings', openSettings);
       window.removeEventListener('mm3:process-song', process);
+      window.removeEventListener('mm3:navigate', navigate);
     };
   }, []);
 
@@ -1287,6 +1295,9 @@ function AppContent() {
 
       case 'news':
         return <NewsPage />;
+
+      case 'adapters':
+        return <AdaptersPage />;
 
       case 'create':
       default:

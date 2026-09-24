@@ -11,6 +11,7 @@ use serde::Deserialize;
 use thiserror::Error;
 
 pub mod mm_server;
+pub mod mm_train;
 pub mod process_group;
 
 /// The lifecycle exposed by audio.cpp. The upstream CLI has no verified numeric

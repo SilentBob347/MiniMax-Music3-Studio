@@ -4,6 +4,8 @@ import { AlertTriangle, ChevronDown, CircleAlert, Dices, FolderOpen, Loader2, Ro
 import type { Music3Request, Song } from '../types';
 import { useI18n } from '../context/I18nContext';
 import { joinCaption, randomExample, splitCaption } from '../services/examples';
+import { AdapterPicker } from './AdapterPicker';
+import { usesFromSettings, type AdapterUse } from '../services/adapters';
 
 /**
  * The Music3 request form.
@@ -243,6 +245,17 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
   // produced; 320 is the top the encoder offers and costs a few megabytes.
   const [format, setFormat] = useState<Music3Request['output_format']>('mp3');
   const [models, setModels] = useState<Record<string, string>>({});
+  const [adapters, setAdapters] = useState<AdapterUse[]>([]);
+
+  // A picked LoRA's trigger word leads the global metadata; removing the LoRA takes it out again.
+  const applyTrigger = useCallback((word: string, present: boolean) => {
+    setGlobalMetadata(current => {
+      const parts = current.split(',').map(part => part.trim());
+      const has = parts.some(part => part.toLowerCase() === word.toLowerCase());
+      if (present) return has ? current : current.trim() ? `${word}, ${current.trim()}` : word;
+      return has ? parts.filter(part => part.toLowerCase() !== word.toLowerCase()).join(', ') : current;
+    });
+  }, []);
 
   const [setup, setSetup] = useState<SetupStatus | null>(null);
   // "Nobody answered" and "the engine says it has no models" are different
@@ -369,13 +382,15 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
     setPeakClip(asString('peak_clip'));
     setMp3Bitrate(asString('mp3_bitrate'));
     if (typeof settings.output_format === 'string') setFormat(settings.output_format as Music3Request['output_format']);
+    // A song made without LoRA reuses without it, whatever was picked before.
+    setAdapters(usesFromSettings(settings as Record<string, unknown>));
   }, [initialData]);
 
   const reset = () => {
     setName(''); setGlobalMetadata(''); setVocalDetails(''); setArrangement(''); setLyrics(''); setInstrumental(false);
     setDuration(''); setLmSeed(''); setLmCfg(''); setLmTopK(''); setAudioCodes('');
     setSteps(''); setDitCfg(''); setSynthBatch(''); setSeed('');
-    setPeakClip(''); setMp3Bitrate('320'); setFormat('mp3'); setModels({});
+    setPeakClip(''); setMp3Bitrate('320'); setFormat('mp3'); setModels({}); setAdapters([]);
     setError(null);
   };
 
@@ -415,6 +430,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
     if (coverPrompt.trim()) request.cover_prompt = coverPrompt.trim();
     if (audioCodes.trim()) request.audio_codes = audioCodes.trim();
     if (Object.keys(models).length === 5) request.models = models;
+    if (adapters.length > 0) request.adapters = adapters;
     return request;
   };
 
@@ -452,6 +468,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
       setMp3Bitrate(asString(parsed.mp3_bitrate));
       if (typeof parsed.audio_codes === 'string') setAudioCodes(parsed.audio_codes);
       if (typeof parsed.output_format === 'string') setFormat(parsed.output_format as Music3Request['output_format']);
+      if (Array.isArray(parsed.adapters)) setAdapters(usesFromSettings(parsed));
       setError(null);
     } catch {
       setError(t('promptFileInvalid'));
@@ -803,6 +820,14 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
             <p className="mt-2 text-[11px] leading-4 text-zinc-500">{t('lyricsHint')}</p>
             {overBudget && <p className="mt-1 text-[11px] leading-4 text-rose-600 dark:text-rose-300">{t('promptTooLong')}</p>}
           </Card>
+
+          <AdapterPicker
+            value={adapters}
+            onChange={setAdapters}
+            onTrigger={applyTrigger}
+            iconClass={ICON}
+            frame={(title, _icon, actions, body) => <Card title={title} actions={actions}>{body}</Card>}
+          />
 
           <Card
             title={t('quality')}
