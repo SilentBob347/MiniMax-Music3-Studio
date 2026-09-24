@@ -1,4 +1,5 @@
 mod processing;
+mod adapters;
 mod auto_title;
 mod tagging;
 mod cover_prompt;
@@ -27,7 +28,7 @@ use anyhow::Context;
 use futures_util::StreamExt;
 
 use axum::{
-    extract::{DefaultBodyLimit, Multipart, Path, State},
+    extract::{DefaultBodyLimit, Multipart, Path, Query, State},
     body::Body,
     http::{header, HeaderMap, StatusCode},
     routing::{get, post},
@@ -79,6 +80,8 @@ struct AppState {
     separation_run: Arc<RwLock<Option<SeparationRun>>>,
     /// The processing run in progress or the last one, with its preview.
     processing_run: Arc<RwLock<Option<processing::ProcessRun>>>,
+    /// Installed adapters, the catalogue and their downloads.
+    adapters: Arc<adapters::AdapterLibrary>,
 }
 
 #[derive(Clone)]
@@ -110,6 +113,18 @@ struct CreateMusicJobRequest {
     /// What the cover should show, when the assistant already described it.
     /// Also library-only, for the same reason.
     cover_prompt: Option<String>,
+    /// Installed adapters to merge for this song, in order.
+    #[serde(default)]
+    adapters: Vec<AdapterUse>,
+}
+
+/// One adapter of a request: its folder and a strength per engine slot. A slot
+/// left out is not changed.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct AdapterUse {
+    id: String,
+    #[serde(default)]
+    scales: std::collections::BTreeMap<String, f64>,
 }
 
 /// The name this request goes into the library under: the user's, or one taken
@@ -477,6 +492,10 @@ pub async fn serve() -> anyhow::Result<()> {
         )),
         separation_run: Arc::new(RwLock::new(None)),
         processing_run: Arc::new(RwLock::new(None)),
+        adapters: Arc::new(adapters::AdapterLibrary::new(
+            &studio_data_root().unwrap_or_else(|| std::path::PathBuf::from(".")),
+            PRIMARY_MUSIC_ENGINE_ID,
+        )),
         selected_profile_id: Arc::new(RwLock::new(selected_profile_id)),
         selected_component_ids: Arc::new(RwLock::new(selected_component_ids)),
         settings_path,
@@ -543,6 +562,14 @@ pub async fn serve() -> anyhow::Result<()> {
         .route("/v1/library/songs/{id}/version", axum::routing::put(select_song_version))
         .route("/v1/library/songs/{id}/versions/{version}", axum::routing::delete(remove_song_version))
         .route("/v1/processing", get(read_processing))
+        .route("/v1/adapters", get(list_adapters))
+        .route("/v1/adapters/import", post(import_adapter))
+        .route("/v1/adapters/cancel", post(cancel_adapter_download))
+        .route("/v1/adapters/install", post(install_catalog_adapters))
+        .route("/v1/adapters/hub", get(search_hub_adapters))
+        .route("/v1/adapters/hub/files", get(list_hub_files))
+        .route("/v1/adapters/hub/install", post(install_hub_adapters))
+        .route("/v1/adapters/{id}", axum::routing::patch(update_adapter).delete(delete_adapter))
         .route("/v1/processing/preview", get(processing_preview))
         .route("/v1/processing/keep", post(keep_processing))
         .route("/v1/processing/discard", post(discard_processing))
@@ -1101,6 +1128,129 @@ async fn install_separation_model(State(state): State<AppState>) -> Result<Json<
         let _ = separator.downloader().install(&separation::MODEL).await;
     });
     Ok(Json(serde_json::json!({ "started": true })))
+}
+
+/// The adapter page: the parts of the model an adapter can change, the
+/// installed adapters with what the engine found in each, the catalogue, and
+/// the download in progress. The engine is asked only when it is already up;
+/// a stopped engine leaves the slots the studio remembered.
+async fn list_adapters(State(state): State<AppState>) -> Json<Value> {
+    let slot_ids: Vec<&str> = music_engine::mm_server::ADAPTER_SLOTS.iter().map(|slot| slot.id).collect();
+    let views = match tokio::time::timeout(std::time::Duration::from_secs(3), state.music_server.props()).await {
+        Ok(Ok(props)) => Some(adapters::engine_views(&props, &slot_ids)),
+        _ => None,
+    };
+    Json(serde_json::json!({
+        "slots": music_engine::mm_server::ADAPTER_SLOTS,
+        "installed": state.adapters.installed(views.as_ref()),
+        "catalog": state.adapters.offered(),
+        "engine_checked": views.is_some(),
+        "download": state.adapters.downloader().active_for(adapters::SCOPE).await,
+        "installing": state.adapters.installing(),
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+struct InstallAdaptersRequest {
+    /// Catalogue entries to fetch as one download.
+    ids: Vec<String>,
+}
+
+async fn install_catalog_adapters(
+    State(state): State<AppState>,
+    Json(input): Json<InstallAdaptersRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<ApiError>)> {
+    state.adapters.begin_install(&input.ids).map_err(|error| api_error(StatusCode::CONFLICT, error.to_string()))?;
+    Ok(Json(serde_json::json!({ "started": true })))
+}
+
+#[derive(Debug, Deserialize)]
+struct HubQuery {
+    #[serde(default)]
+    q: String,
+    #[serde(default)]
+    repo: String,
+}
+
+async fn search_hub_adapters(State(state): State<AppState>, Query(query): Query<HubQuery>) -> Result<Json<Value>, (StatusCode, Json<ApiError>)> {
+    let found = state.adapters.hub_search(&sizes::client(), &query.q).await.map_err(|error| api_error(StatusCode::BAD_GATEWAY, format!("{error:#}")))?;
+    Ok(Json(serde_json::json!({ "repos": found })))
+}
+
+/// The weight files of a repository; `repo` may be an id or any link into it,
+/// and a link to one file comes back with that file named.
+async fn list_hub_files(State(state): State<AppState>, Query(query): Query<HubQuery>) -> Result<Json<Value>, (StatusCode, Json<ApiError>)> {
+    let (repo, file) = adapters::hub_reference(&query.repo)
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "that is not a Hugging Face repository or file link".into()))?;
+    let listing = state.adapters.hub_files(&sizes::client(), &repo).await.map_err(|error| api_error(StatusCode::BAD_GATEWAY, format!("{error:#}")))?;
+    Ok(Json(serde_json::json!({ "listing": listing, "file": file })))
+}
+
+#[derive(Debug, Deserialize)]
+struct InstallHubRequest {
+    repo: String,
+    paths: Vec<String>,
+}
+
+async fn install_hub_adapters(State(state): State<AppState>, Json(input): Json<InstallHubRequest>) -> Result<Json<Value>, (StatusCode, Json<ApiError>)> {
+    state
+        .adapters
+        .begin_hub_install(&sizes::client(), &input.repo, &input.paths)
+        .await
+        .map_err(|error| api_error(StatusCode::CONFLICT, format!("{error:#}")))?;
+    Ok(Json(serde_json::json!({ "started": true })))
+}
+
+async fn cancel_adapter_download(State(state): State<AppState>) -> Json<Value> {
+    state.adapters.downloader().cancel();
+    Json(serde_json::json!({ "cancelled": true }))
+}
+
+/// Stores uploaded adapter files: one or more `.safetensors`, and the
+/// `adapter_config.json` or `lora.json` that came with them.
+async fn import_adapter(
+    State(state): State<AppState>,
+    mut multipart: Multipart,
+) -> Result<(StatusCode, Json<adapters::AdapterMeta>), (StatusCode, Json<ApiError>)> {
+    let mut name = String::new();
+    let mut files = Vec::new();
+    while let Some(field) = multipart.next_field().await.map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("read adapter form: {e}")))? {
+        match (field.name().unwrap_or_default().to_owned(), field.file_name().map(str::to_owned)) {
+            (key, Some(file)) if key == "files" => {
+                let bytes = field.bytes().await.map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("read {file}: {e}")))?;
+                files.push((file, bytes.to_vec()));
+            }
+            (key, _) if key == "name" => {
+                name = field.text().await.map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("read adapter name: {e}")))?;
+            }
+            _ => {}
+        }
+    }
+    if name.trim().is_empty() {
+        name = files
+            .iter()
+            .find(|(file, _)| file.ends_with(".safetensors"))
+            .and_then(|(file, _)| std::path::Path::new(file).file_stem().and_then(|stem| stem.to_str()).map(str::to_owned))
+            .unwrap_or_else(|| "Adapter".into());
+    }
+    let meta = state
+        .adapters
+        .import(&name, files, adapters::Origin::Imported)
+        .map_err(|e| api_error(StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok((StatusCode::CREATED, Json(meta)))
+}
+
+async fn update_adapter(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(patch): Json<adapters::Patch>,
+) -> Result<Json<adapters::AdapterMeta>, (StatusCode, Json<ApiError>)> {
+    state.adapters.update(&id, patch).map(Json).map_err(|e| api_error(StatusCode::NOT_FOUND, e.to_string()))
+}
+
+async fn delete_adapter(State(state): State<AppState>, Path(id): Path<String>) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
+    state.adapters.remove(&id).map_err(|e| api_error(StatusCode::NOT_FOUND, e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Starts processing a track into a preview. One run at a time: the stages are
@@ -2247,6 +2397,13 @@ fn engine_location(options: EngineOptions) -> music_engine::mm_server::MmServerL
                 let managed = studio_data_root()?.join("models").join(model_manager::ENGINE_ID);
                 managed.is_dir().then_some(managed)
             }),
+        adapters_root: studio_data_root().map(|root| root.join("adapters")).filter(|folder| match std::fs::create_dir_all(folder) {
+            Ok(()) => true,
+            Err(error) => {
+                eprintln!("[ERROR] the adapter folder {} cannot be created, the engine starts without adapters: {error}", folder.display());
+                false
+            }
+        }),
         host: env::var("MINIMAX_MM_SERVER_HOST").ok(),
         port: env::var("MINIMAX_MM_SERVER_PORT").ok().and_then(|value| value.parse().ok()),
         options: options.to_engine(),
@@ -4678,7 +4835,35 @@ fn mm_request_from(request: &CreateMusicJobRequest, selected_profile_id: Option<
     insert_optional(&mut body, "lm_top_k", request.lm_top_k);
     insert_optional(&mut body, "dit_cfg", request.dit_cfg);
     insert_optional(&mut body, "output_format", request.output_format.clone());
+    if !request.adapters.is_empty() {
+        body["adapters"] = Value::Array(adapter_fields(&request.adapters)?);
+    }
     Ok(body)
+}
+
+/// The engine's own spelling of an adapter list: the folder as `name`, and
+/// `<slot>_scale` for every slot, zero where the request leaves one out.
+fn adapter_fields(uses: &[AdapterUse]) -> Result<Vec<Value>, String> {
+    let slots = music_engine::mm_server::ADAPTER_SLOTS;
+    uses.iter()
+        .map(|adapter| {
+            if adapter.id.trim().is_empty() {
+                return Err("an adapter has no id".to_string());
+            }
+            if let Some(unknown) = adapter.scales.keys().find(|key| !slots.iter().any(|slot| slot.id == key.as_str())) {
+                return Err(format!("adapter {} names an unknown slot {unknown}", adapter.id));
+            }
+            let mut entry = serde_json::json!({ "name": adapter.id });
+            for slot in slots {
+                let scale = adapter.scales.get(slot.id).copied().unwrap_or(0.0);
+                if !scale.is_finite() || !(-4.0..=4.0).contains(&scale) {
+                    return Err(format!("adapter {} strength must be between -4 and 4", adapter.id));
+                }
+                entry[format!("{}_scale", slot.id)] = serde_json::json!(scale);
+            }
+            Ok(entry)
+        })
+        .collect()
 }
 
 fn insert_optional<T: Serialize>(body: &mut Value, key: &str, value: Option<T>) {
@@ -4774,6 +4959,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn adapters_travel_as_engine_fields_with_every_slot_spelled_out() {
+        let request = |adapters: Value| -> CreateMusicJobRequest {
+            serde_json::from_value(serde_json::json!({
+                "caption": "night drive", "lyrics": "one line", "duration_seconds": 30.0,
+                "models": { "lm_model": "lm.gguf", "depth_model": "depth.gguf", "cond_model": "c.gguf", "dit_model": "dit.gguf", "vae_model": "v.gguf" },
+                "adapters": adapters,
+            }))
+            .unwrap()
+        };
+        let body = mm_request_from(&request(serde_json::json!([{ "id": "mm3-slider-metal", "scales": { "lm": 0.75 } }])), None, None, None).unwrap();
+        assert_eq!(body["adapters"], serde_json::json!([{ "name": "mm3-slider-metal", "lm_scale": 0.75, "dit_scale": 0.0 }]));
+        assert!(mm_request_from(&request(serde_json::json!([])), None, None, None).unwrap().get("adapters").is_none());
+        let unknown = request(serde_json::json!([{ "id": "x", "scales": { "nar": 1.0 } }]));
+        assert!(mm_request_from(&unknown, None, None, None).unwrap_err().contains("unknown slot"));
+        let huge = request(serde_json::json!([{ "id": "x", "scales": { "dit": 40.0 } }]));
+        assert!(mm_request_from(&huge, None, None, None).is_err());
+    }
+
+    #[test]
     fn the_engine_is_asked_for_float_when_the_studio_makes_the_mp3() {
         let mp3 = serde_json::json!({ "caption": "x", "output_format": "mp3", "mp3_bitrate": 320 });
         let sent = engine_submission(&mp3);
@@ -4844,6 +5048,7 @@ mod tests {
     fn request_maps_only_confirmed_mm_server_fields() {
         let body = mm_request_from(&CreateMusicJobRequest {
             cover_prompt: None,
+            adapters: Vec::new(),
             title: None,
             caption: "night drive".into(),
             lyrics: "one line".into(),
@@ -4883,6 +5088,7 @@ mod tests {
     fn request_rejects_legacy_audio_formats_not_supported_by_mm_server() {
         let error = mm_request_from(&CreateMusicJobRequest {
             cover_prompt: None,
+            adapters: Vec::new(),
             title: None,
             caption: "night drive".into(),
             lyrics: "one line".into(),
@@ -4913,6 +5119,7 @@ mod tests {
     fn request_uses_confirmed_mm3_defaults_and_rejects_invalid_synth_batch() {
         let request = CreateMusicJobRequest {
             cover_prompt: None,
+            adapters: Vec::new(),
             title: None,
             caption: "night drive".into(), lyrics: "[verse] one line".into(), duration_seconds: 60.0,
             steps: None, seed: None, lm_seed: None, lm_cfg: None, lm_top_k: None,
@@ -4983,6 +5190,7 @@ mod tests {
         let mut job = queued_not_configured_job(
             CreateMusicJobRequest {
                 cover_prompt: None,
+                adapters: Vec::new(),
                 title: None,
             caption: "night drive".into(),
                 lyrics: "one line".into(),

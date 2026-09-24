@@ -21,10 +21,28 @@ use anyhow::{bail, Context, Result};
 const DEFAULT_HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 8086;
 
+/// A part of the model an adapter can change, with its own strength.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct AdapterSlot {
+    /// The engine's name for the part, its flag in `/props` and the prefix of
+    /// its `<id>_scale` request field.
+    pub id: &'static str,
+    /// What changing that part does to a song, for the interface to name.
+    pub role: &'static str,
+}
+
+/// MiniMax Music 3's planner LM writes the song - its structure, the vocal
+/// line, where it ends - and the flow DiT renders its sound; they share no
+/// weight.
+pub const ADAPTER_SLOTS: &[AdapterSlot] =
+    &[AdapterSlot { id: "lm", role: "composition" }, AdapterSlot { id: "dit", role: "sound" }];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MmServerLaunchConfig {
     pub executable: PathBuf,
     pub models_root: PathBuf,
+    /// The studio's adapter folder, which requests name adapters in.
+    pub adapters_root: Option<PathBuf>,
     pub host: String,
     pub port: u16,
     pub options: MmServerOptions,
@@ -85,6 +103,8 @@ pub struct MmServerLocation {
     /// Explicit model directory selected by settings. The directory must
     /// already exist; the supervisor never creates or downloads weights.
     pub configured_models_root: Option<PathBuf>,
+    /// The studio's adapter folder; created by the studio, never here.
+    pub adapters_root: Option<PathBuf>,
     pub host: Option<String>,
     pub port: Option<u16>,
     pub options: MmServerOptions,
@@ -123,6 +143,7 @@ impl MmServerLocation {
         Ok(MmServerLaunchConfig {
             executable,
             models_root,
+            adapters_root: self.adapters_root,
             host,
             port: self.port.unwrap_or(DEFAULT_PORT),
             options: self.options,
@@ -167,6 +188,9 @@ impl MmServerSupervisor {
             .arg(&self.config.host)
             .arg("--port")
             .arg(self.config.port.to_string());
+        if let Some(adapters) = &self.config.adapters_root {
+            command.arg("--adapters").arg(adapters);
+        }
         self.config.options.apply(&mut command);
         command.stdin(Stdio::null());
         // Everything the engine says while it is starting - loading weights,
@@ -411,6 +435,7 @@ mod tests {
             bundle_root: root.clone(),
             configured_executable: None,
             configured_models_root: None,
+            adapters_root: None,
             host: None,
             port: None,
             options: MmServerOptions::default(),
