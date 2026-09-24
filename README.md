@@ -63,6 +63,22 @@ ask it to.
   artist, album, genre, tempo, the lyrics and the cover art.
 - **Choose your own quality/VRAM trade-off** in the model manager. Nothing downloads by
   itself.
+- **LoRA** — LoRA and LoKr for the language model (the composition) and for the DiT (the
+  sound), each with its own strength, picked in the create form. The engine reads PEFT,
+  LyCORIS, diffusers and ComfyUI files. A catalogue of ready ones with their authors
+  credited, and a search on Hugging Face that downloads what you pick.
+- **Train your own LoRA** — an optional tab on the LoRA page: 5–20 songs of one artist or
+  style become a language-model LoRA on your own card, with HOT-Step's `mm3-lm-train` and
+  its HOT-PiZZA recipe. Every setting is editable. The assistant writes each song's caption
+  by ear, datasets move between this studio and YuE2 Studio as a folder, and each saved
+  checkpoint goes into the LoRA library in one click.
+- **Audio processing** — noise reduction, the Spectral Lifter, a vocal naturaliser, your
+  own VST3 plugins in a chain, and mastering to a reference track. Compare before and
+  after while it plays, then keep the result as a version of the track or throw it away.
+- **MP3 made by the studio** — the engine renders 32-bit float and the studio encodes the
+  MP3 with LAME, so nothing is lost before the encoder.
+- **Fewer steps, same sharpness** — below 30 DiT steps the engine raises the flow shift by
+  itself (`29/(steps-1)`), so a fast render keeps its detail.
 
 ## Screenshots
 
@@ -86,6 +102,10 @@ Windows 10/11 x64 and an NVIDIA card of the **GTX 16 / RTX 20 generation or newe
 Turing, Ampere, Ada and Blackwell. The engine ships compiled for those architectures;
 Pascal and older (GTX 10 series and down) are not supported, because the CUDA 13 toolkit
 that builds it dropped them.
+
+Training a LoRA is optional and needs an NVIDIA RTX 30-series card or newer with 22 GB of
+VRAM (an RTX 3090, 4090 or 5090) and about 10.5 GB more disk for the trainer and its
+weights, downloaded only when you open training.
 
 ## Models
 
@@ -225,7 +245,9 @@ missing, so a hand-placed DLL is simply found and used.
 React UI ─┐
           ├─ MiniMax Music3 Studio.exe   (window + native service)
 Rust axum ┘        │
-                   └─ minimaxmusic.cpp `mm-server`  (C++/CUDA, GGUF)
+                   ├─ minimaxmusic.cpp `mm-server`  (C++/CUDA, GGUF)
+                   ├─ music-train.exe               (HOT-Step ace-train, LoRA training, optional)
+                   └─ vst-host.exe                  (HOT-Step VST3 host, a process of its own)
 ```
 
 The service is compiled into the desktop binary and supervises the C++ engine. Cloud
@@ -307,3 +329,19 @@ own community license — commercial use must display the MiniMax-Music3 name an
 the safeguards that license requires.
 
 What changed and when is in [CHANGELOG.md](CHANGELOG.md).
+
+## Acknowledgements
+
+- [MiniMax](https://huggingface.co/MiniMaxAI) for MiniMax Music3.
+- [Serveurperso](https://github.com/ServeurpersoCom) for minimaxmusic.cpp.
+- [scragnog](https://github.com/scragnog) for the GGUF conversions in
+  [scragnog/MiniMax-Music3-GGUF](https://huggingface.co/scragnog/MiniMax-Music3-GGUF) and
+  for [HOT-Step-CPP](https://github.com/scragnog/HOT-Step-CPP): the LoRA trainer the studio
+  runs (`mm3-codes` and `mm3-lm-train` with the HOT-PiZZA recipe), the VST3 host, and the
+  noise reduction, Spectral Lifter and mastering designs the audio processing is ported from.
+- [sergree](https://github.com/sergree) for [matchering](https://github.com/sergree/matchering),
+  the reference mastering algorithm, and [jeankassio](https://github.com/jeankassio) for the
+  vocal naturalizer in [ComfyUI_MusicTools](https://github.com/jeankassio/ComfyUI_MusicTools).
+- [ntc-ai](https://huggingface.co/ntc-ai) for the sliders in the LoRA catalogue, each
+  credited and linked on its card.
+- The [LAME](https://lame.sourceforge.io) project for the MP3 encoder.

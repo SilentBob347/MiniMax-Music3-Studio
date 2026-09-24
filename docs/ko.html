@@ -286,7 +286,10 @@ const STRINGS = {
       ['Your library', 'Search, playlists, favourites, import your own audio, export, edit — all in plain files on your disk.'],
       ['What it costs you', 'Live GPU load, VRAM, temperature, power draw and engine memory while it generates.'],
       ['Stems on your GPU', 'Six tracks - drums, bass, other, vocals, guitar, piano - separated by HT-Demucs on the card, or on the processor when you prefer. The model is an optional download, like everything else.'],
-      ['Files that carry their own data', 'Exported MP3s hold title, artist, album, genre, tempo, the lyrics and the cover art, so a player shows the track the way the studio does.']
+      ['Files that carry their own data', 'Exported MP3s hold title, artist, album, genre, tempo, the lyrics and the cover art, so a player shows the track the way the studio does.'],
+      ['LoRA', 'LoRA and LoKr for the composition or the sound, each with its own strength. A catalogue of ready ones, and a Hugging Face search that downloads what you pick.'],
+      ['Your own LoRA', '5–20 songs of one artist or style become a LoRA on your card, with HOT-Step’s trainer and recipe. Every setting is editable, and datasets move between this studio and YuE2 Studio.'],
+      ['Audio processing', 'Noise reduction, the Spectral Lifter, a vocal naturaliser, your own VST3 plugins and mastering to a reference. Compare before and after, keep it as a version or throw it away.']
     ],
     modelsTitle: 'Models',
     modelsSub: 'A runnable Music3 installation is always five components: language model, RVQ depth decoder, condition encoder, DiT and vocoder.',
@@ -334,6 +337,8 @@ const STRINGS = {
       ['Writing assistant', 'Local GGUF or OpenRouter', 'your choice'],
       ['Cover art', 'OpenRouter image model', 'cloud only'],
       ['Video export - ffmpeg', 'Your machine', 'bundled'],
+      ['LoRA trainer — HOT-Step ace-train', 'NVIDIA RTX 30 or newer, 22 GB of VRAM', '10.5 GB, optional'],
+      ['VST3 host — HOT-Step', 'Your machine, a process of its own', 'bundled'],
     ],
   },
   ru: {
@@ -366,7 +371,10 @@ const STRINGS = {
       ['Библиотека', 'Поиск, плейлисты, избранное, импорт своего аудио, экспорт, редактор — обычные файлы на вашем диске.'],
       ['Сколько это стоит железу', 'Живая нагрузка GPU, VRAM, температура, потребление и память движка прямо во время генерации.'],
       ['Стемы на вашей видеокарте', 'Шесть дорожек — ударные, бас, остальное, вокал, гитара, пианино — разбирает HT-Demucs на карте или на процессоре, как решите. Модель качается по желанию, как и всё остальное.'],
-      ['Файлы со своими данными', 'В экспортированный MP3 записаны название, исполнитель, альбом, жанр, темп, текст и обложка, поэтому плеер показывает трек так же, как студия.']
+      ['Файлы со своими данными', 'В экспортированный MP3 записаны название, исполнитель, альбом, жанр, темп, текст и обложка, поэтому плеер показывает трек так же, как студия.'],
+      ['LoRA', 'LoRA и LoKr на композицию или на звук, у каждой своя сила. Каталог готовых и поиск по Hugging Face со скачиванием выбранного.'],
+      ['Своя LoRA', '5–20 песен одного артиста или стиля превращаются в LoRA на вашей видеокарте — тренером и рецептом HOT-Step. Каждую настройку можно поменять, датасеты переносятся между этой студией и YuE2 Studio.'],
+      ['Обработка звука', 'Шумоподавление, Spectral Lifter, очеловечивание вокала, ваши VST3-плагины и мастеринг по эталону. Сравните до и после, сохраните версией или выбросьте.']
     ],
     modelsTitle: 'Модели',
     modelsSub: 'Рабочая установка Music3 — это всегда пять компонентов: языковая модель, RVQ depth-декодер, condition-энкодер, DiT и вокодер.',
@@ -414,6 +422,8 @@ const STRINGS = {
       ['Ассистент-автор', 'Локальная GGUF или OpenRouter', 'на ваш выбор'],
       ['Обложки', 'Модель изображений OpenRouter', 'только облако'],
       ['Сборка видео — ffmpeg', 'Ваша машина', 'в комплекте'],
+      ['Обучение LoRA — HOT-Step ace-train', 'NVIDIA RTX 30 и новее, 22 ГБ видеопамяти', '10.5 ГБ, по желанию'],
+      ['VST3-хост — HOT-Step', 'Ваш компьютер, отдельный процесс', 'в комплекте'],
     ],
   },
   zh: {
@@ -446,7 +456,10 @@ const STRINGS = {
       ['你的曲库', '搜索、歌单、收藏、导入自有音频、导出、编辑——全部是磁盘上的普通文件。'],
       ['硬件开销一目了然', '生成过程中实时显示 GPU 占用、显存、温度、功耗与引擎内存。'],
       ['在你的显卡上分离音轨', '六条音轨——鼓、贝斯、其他、人声、吉他、钢琴——由 HT-Demucs 在显卡上分离，也可以改用处理器。模型和其他一切一样，按需下载。'],
-      ['自带信息的文件', '导出的 MP3 内含标题、艺术家、专辑、风格、速度、歌词与封面，播放器看到的与工作室一致。']
+      ['自带信息的文件', '导出的 MP3 内含标题、艺术家、专辑、风格、速度、歌词与封面，播放器看到的与工作室一致。'],
+      ['LoRA', '作用于作曲或音色的 LoRA 与 LoKr，各自设置强度。内置现成目录，也可在 Hugging Face 搜索并下载所选。'],
+      ['训练你自己的 LoRA', '用同一歌手或风格的 5–20 首歌，在你的显卡上以 HOT-Step 的训练器和配方训练 LoRA。每项设置都可修改，数据集可在本工作室与 YuE2 Studio 之间迁移。'],
+      ['音频处理', '降噪、Spectral Lifter、人声自然化、你自己的 VST3 插件，以及参考母带处理。对比处理前后，保存为版本或丢弃。']
     ],
     modelsTitle: '模型',
     modelsSub: '可运行的 Music3 安装始终由五个组件构成：语言模型、RVQ 深度解码器、条件编码器、DiT 与声码器。',
@@ -494,6 +507,8 @@ const STRINGS = {
       ['写作助手', '本地 GGUF 或 OpenRouter', '由你选择'],
       ['封面图', 'OpenRouter 图像模型', '仅云端'],
       ['视频导出 — ffmpeg', '你的电脑', '已内置'],
+      ['LoRA 训练 — HOT-Step ace-train', 'NVIDIA RTX 30 或更新，22 GB 显存', '10.5 GB，可选'],
+      ['VST3 宿主 — HOT-Step', '你的电脑，独立进程', '内置'],
     ],
   },
   ja: {
@@ -526,7 +541,10 @@ const STRINGS = {
       ['ライブラリ', '検索、プレイリスト、お気に入り、自分の音源の取り込み、書き出し、編集——すべてディスク上の普通のファイルです。'],
       ['負荷が見える', '生成中の GPU 使用率、VRAM、温度、消費電力、エンジンのメモリをその場で表示。'],
       ['GPU でステム分離', 'ドラム、ベース、その他、ボーカル、ギター、ピアノの 6 トラックを HT-Demucs が GPU で分離します。CPU も選べます。モデルは他と同じく任意のダウンロードです。'],
-      ['情報を持ったファイル', '書き出した MP3 にはタイトル、アーティスト、アルバム、ジャンル、テンポ、歌詞、カバーが入っているので、プレーヤーでもスタジオと同じに見えます。']
+      ['情報を持ったファイル', '書き出した MP3 にはタイトル、アーティスト、アルバム、ジャンル、テンポ、歌詞、カバーが入っているので、プレーヤーでもスタジオと同じに見えます。'],
+      ['LoRA', '作曲またはサウンドに効く LoRA と LoKr を、それぞれ強さを付けて使えます。既製のカタログと、選んだものをダウンロードする Hugging Face 検索付き。'],
+      ['自分だけの LoRA', '同じアーティストやスタイルの 5〜20 曲から、HOT-Step のトレーナーとレシピで LoRA を自分の GPU で学習。設定はすべて変更でき、データセットはこのスタジオと YuE2 Studio の間で移せます。'],
+      ['音声処理', 'ノイズ除去、Spectral Lifter、ボーカルの自然化、自分の VST3 プラグイン、リファレンスマスタリング。処理前後を聴き比べ、バージョンとして残すか破棄します。']
     ],
     modelsTitle: 'モデル',
     modelsSub: '動作する Music3 の構成は常に五つ：言語モデル、RVQ デプスデコーダ、コンディションエンコーダ、DiT、ボコーダ。',
@@ -574,6 +592,8 @@ const STRINGS = {
       ['作詞・説明アシスタント', 'ローカル GGUF か OpenRouter', 'お好みで'],
       ['カバーアート', 'OpenRouter の画像モデル', 'クラウドのみ'],
       ['動画書き出し — ffmpeg', 'あなたの PC', '同梱'],
+      ['LoRA 学習 — HOT-Step ace-train', 'NVIDIA RTX 30 以降、VRAM 22 GB', '10.5 GB、任意'],
+      ['VST3 ホスト — HOT-Step', 'あなたのマシン、独立したプロセス', '同梱'],
     ],
   },
   ko: {
@@ -606,7 +626,10 @@ const STRINGS = {
       ['내 라이브러리', '검색, 재생목록, 즐겨찾기, 내 오디오 가져오기, 내보내기, 편집 — 전부 디스크의 평범한 파일입니다.'],
       ['부하가 보인다', '생성 중 GPU 사용률, VRAM, 온도, 전력, 엔진 메모리를 실시간으로 표시합니다.'],
       ['내 GPU에서 스템 분리', '드럼, 베이스, 기타 소리, 보컬, 기타, 피아노 — 여섯 트랙을 HT-Demucs가 그래픽카드에서 분리합니다. 원하면 CPU로도. 모델은 다른 것과 마찬가지로 선택 다운로드입니다.'],
-      ['스스로 정보를 지닌 파일', '내보낸 MP3에는 제목, 아티스트, 앨범, 장르, 템포, 가사, 커버가 들어 있어 플레이어에서도 스튜디오와 똑같이 보입니다.']
+      ['스스로 정보를 지닌 파일', '내보낸 MP3에는 제목, 아티스트, 앨범, 장르, 템포, 가사, 커버가 들어 있어 플레이어에서도 스튜디오와 똑같이 보입니다.'],
+      ['LoRA', '작곡 또는 사운드에 적용하는 LoRA와 LoKr, 각각 강도를 따로 설정합니다. 준비된 카탈로그와 고른 것을 내려받는 Hugging Face 검색이 있습니다.'],
+      ['나만의 LoRA', '한 아티스트나 스타일의 곡 5–20개로 HOT-Step의 트레이너와 레시피를 써서 내 GPU에서 LoRA를 학습합니다. 모든 설정을 바꿀 수 있고, 데이터셋은 이 스튜디오와 YuE2 Studio 사이를 오갑니다.'],
+      ['오디오 처리', '노이즈 제거, Spectral Lifter, 보컬 자연화, 내 VST3 플러그인, 레퍼런스 마스터링. 처리 전후를 비교하고 버전으로 남기거나 버립니다.']
     ],
     modelsTitle: '모델',
     modelsSub: '동작하는 Music3 설치는 언제나 다섯 구성 요소입니다: 언어 모델, RVQ 깊이 디코더, 조건 인코더, DiT, 보코더.',
@@ -654,6 +677,8 @@ const STRINGS = {
       ['작성 어시스턴트', '로컬 GGUF 또는 OpenRouter', '선택 사항'],
       ['커버 아트', 'OpenRouter 이미지 모델', '클라우드 전용'],
       ['영상 내보내기 — ffmpeg', '내 컴퓨터', '기본 포함'],
+      ['LoRA 학습 — HOT-Step ace-train', 'NVIDIA RTX 30 이상, VRAM 22 GB', '10.5 GB, 선택'],
+      ['VST3 호스트 — HOT-Step', '내 컴퓨터, 별도 프로세스', '포함'],
     ],
   }
 };
