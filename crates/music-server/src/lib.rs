@@ -320,6 +320,7 @@ struct OpenRouterTranscriptionRequest {
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 struct EngineOptions {
+    backend: music_engine::mm_server::ComputeBackend,
     keep_loaded: bool,
     max_batch: Option<u32>,
     max_seq: Option<u32>,
@@ -341,8 +342,21 @@ impl EngineOptions {
         self.max_batch.unwrap_or(1).max(1)
     }
 
+    /// The CUDA build the engine will compute on, and so the cuBLAS it needs:
+    /// chosen outright, or left to ggml on an NVIDIA card one of the builds
+    /// runs on. None on Vulkan and the processor.
+    fn cuda_build(&self) -> Option<cuda_build::CudaBuild> {
+        use music_engine::mm_server::ComputeBackend;
+        match self.backend {
+            ComputeBackend::Cuda | ComputeBackend::Auto => cuda_build::current(),
+            ComputeBackend::Vulkan | ComputeBackend::Cpu => None,
+        }
+    }
+
     fn to_engine(self) -> music_engine::mm_server::MmServerOptions {
+        let cuda = self.cuda_build();
         music_engine::mm_server::MmServerOptions {
+            backend: self.backend,
             keep_loaded: self.keep_loaded,
             // The ceiling the studio offers, given to the engine that has to
             // honour it. `--max-batch` sizes the language model's KV sets when
@@ -354,8 +368,11 @@ impl EngineOptions {
             max_seq: self.max_seq,
             disable_flash_attention: self.disable_flash_attention,
             split_cfg_forwards: self.split_cfg_forwards,
-            clamp_fp16: self.clamp_fp16 || cuda_build::accumulates_in_fp16(),
-            cuda_folder: cuda_build::current().map(cuda_build::CudaBuild::folder),
+            // Off CUDA - Vulkan, where an AMD Radeon leaves the FP16 range
+            // and renders silence, or the processor - and on CUDA cards before
+            // Ampere, which accumulate in FP16. In range it changes nothing.
+            clamp_fp16: self.clamp_fp16 || cuda.is_none() || cuda_build::accumulates_in_fp16(),
+            cuda_folder: cuda.map(cuda_build::CudaBuild::folder),
         }
     }
 }
@@ -2975,15 +2992,22 @@ async fn restart_engine(state: &AppState) -> Result<(), String> {
     // is not a slow start, it is no start at all. This is the path the studio
     // actually takes on launch, so the fetch belongs here rather than only in
     // the endpoint nothing calls.
-    let Some(build) = cuda_build::current() else {
+    let chosen = *state.engine_options.read().await;
+    if chosen.backend == music_engine::mm_server::ComputeBackend::Cuda && cuda_build::current().is_none() {
         return Err(cuda_build::UNSUPPORTED.into());
-    };
-    if !state.engine_runtime.is_ready(build) {
-        state
-            .engine_runtime
-            .install_missing(build)
+    }
+    match chosen.cuda_build() {
+        Some(build) if !state.engine_runtime.is_ready(build) => {
+            state
+                .engine_runtime
+                .install_missing(build)
+                .await
+                .map_err(|error| format!("the engine's CUDA libraries could not be downloaded: {error}"))?;
+        }
+        Some(_) => {}
+        None => engine_runtime::ensure_vc_runtime()
             .await
-            .map_err(|error| format!("the engine's CUDA libraries could not be downloaded: {error}"))?;
+            .map_err(|error| format!("the Visual C++ runtime could not be installed: {error}"))?,
     }
     // The engine loads eleven gigabytes of weights the moment it starts. If
     // the writing assistant is still holding the card, it does not finish.
@@ -3457,13 +3481,16 @@ async fn compose_setup_status(state: &AppState, manager_status: model_manager::M
         // an engine that starts in three seconds and one that starts in ten
         // minutes. A spinner that says nothing for ten minutes is the same
         // screen as a spinner that is stuck.
-        let runtime_build = cuda_build::current();
+        let runtime_build = state.engine_options.read().await.cuda_build();
         let runtime_total = runtime_build.map(|build| engine_runtime::cublas_asset(build).bytes).unwrap_or(0);
         let runtime_active = state.engine_runtime.downloader().active().await;
         fields.insert(
             "engine_runtime".into(),
             serde_json::json!({
-                "ready": runtime_build.is_some_and(|build| state.engine_runtime.is_ready(build)),
+                "ready": match runtime_build {
+                    Some(build) => state.engine_runtime.is_ready(build),
+                    None => engine_runtime::vc_runtime_present(),
+                },
                 "downloading": runtime_active.is_some(),
                 "downloaded_bytes": runtime_active.as_ref().map(|progress| progress.downloaded_bytes).unwrap_or(0),
                 "total_bytes": runtime_total,

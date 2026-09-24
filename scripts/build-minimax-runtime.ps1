@@ -123,7 +123,8 @@ function Invoke-CustomCudaBuild {
         # Upstream's own script leaves both at "whatever this machine is", which
         # produces a binary only this machine can run.
         # The backends load at run time (GGML_BACKEND_DL), so the CUDA 12
-        # backend of Invoke-Cuda12Build can take this one's place.
+        # backend of Invoke-Cuda12Build can take this one's place, and Vulkan
+        # serves AMD and Intel cards and NVIDIA cards neither CUDA build runs.
         # The trailing 120-virtual follows NVIDIA's "Building for Maximum
         # Compatibility" rule: without PTX for the newest architecture there is
         # nothing to JIT from and the kernel launch simply fails. ggml rewrites
@@ -131,11 +132,12 @@ function Invoke-CustomCudaBuild {
         # tensor core instructions that only exist in 12Xa - so this buys PTX
         # for Blackwell variants, not for whatever comes after them. ggml's own
         # comment puts that boundary at Rubin.
-        'universal' { '-DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON "-DCMAKE_CUDA_ARCHITECTURES=75-real;80-real;86-real;89-real;90-real;120a-real;120-virtual"' }
+        'universal' { '-DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_VULKAN=ON "-DCMAKE_CUDA_ARCHITECTURES=75-real;80-real;86-real;89-real;90-real;120a-real;120-virtual"' }
         'native' { '-DCMAKE_CUDA_ARCHITECTURES=native' }
         'sm_89' { '-DCMAKE_CUDA_ARCHITECTURES=89' }
         default { throw "No custom CMake architecture is defined for '$CudaArchitecture'." }
     }
+    if ($CudaArchitecture -eq 'universal') { Assert-VulkanSdk }
     $vcvars = Get-VcVars64
     $buildDirectoryName = "build-cuda-$CudaArchitecture"
     $parallelism = [Math]::Max(1, [Environment]::ProcessorCount)

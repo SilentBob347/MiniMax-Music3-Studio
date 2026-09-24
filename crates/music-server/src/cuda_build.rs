@@ -97,7 +97,7 @@ pub fn accumulates_in_fp16() -> bool {
 
 /// Why the engine cannot start on CUDA here, in words for the person at the
 /// machine.
-pub const UNSUPPORTED: &str = "This card or its driver runs neither CUDA build of the engine: it needs an NVIDIA card from the GTX 900 series on and driver 525 or newer. Update the NVIDIA driver.";
+pub const UNSUPPORTED: &str = "CUDA was chosen, but this card or its driver runs neither CUDA build of the engine: it needs an NVIDIA card from the GTX 900 series on and driver 525 or newer. Update the NVIDIA driver, or choose Vulkan in Settings.";
 
 #[cfg(test)]
 mod tests {

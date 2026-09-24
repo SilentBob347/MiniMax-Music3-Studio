@@ -48,12 +48,39 @@ pub struct MmServerLaunchConfig {
     pub options: MmServerOptions,
 }
 
+/// The ggml backend the engine computes on. The bundled engine loads its
+/// backends at run time, so one build serves NVIDIA (CUDA), AMD and Intel
+/// (Vulkan) and the processor; `Auto` lets ggml take the best device it finds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ComputeBackend {
+    #[default]
+    Auto,
+    Cuda,
+    Vulkan,
+    Cpu,
+}
+
+impl ComputeBackend {
+    /// The device name `mm-server` reads from `GGML_BACKEND`, none for `Auto`.
+    pub fn ggml_device(self) -> Option<&'static str> {
+        match self {
+            Self::Auto => None,
+            Self::Cuda => Some("CUDA0"),
+            Self::Vulkan => Some("Vulkan0"),
+            Self::Cpu => Some("CPU"),
+        }
+    }
+}
+
 /// The launch flags upstream `mm-server` accepts, as documented by its usage
 /// text. They change how the engine uses the GPU for the whole session, so they
 /// belong to the process, not to a single request — changing one requires a
 /// restart of the engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct MmServerOptions {
+    /// The device to compute on, passed as `GGML_BACKEND`.
+    pub backend: ComputeBackend,
     /// `--keep-loaded`: hold every module in VRAM between jobs instead of
     /// evicting between stages. Much faster back-to-back generation, at the
     /// cost of a permanently higher VRAM footprint.
@@ -214,6 +241,14 @@ impl MmServerSupervisor {
             command.arg("--adapters").arg(adapters);
         }
         self.config.options.apply(&mut command);
+        match self.config.options.backend.ggml_device() {
+            Some(device) => {
+                command.env("GGML_BACKEND", device);
+            }
+            None => {
+                command.env_remove("GGML_BACKEND");
+            }
+        }
         match self.config.cuda_backend()? {
             Some(backend) => {
                 command.env("MM3_CUDA_BACKEND", backend);
@@ -483,6 +518,15 @@ mod tests {
     /// silently dropped `--keep-loaded` looks like the setting simply does
     /// nothing.
     #[test]
+    fn the_compute_backend_names_the_device_ggml_reads() {
+        assert_eq!(ComputeBackend::Auto.ggml_device(), None);
+        assert_eq!(ComputeBackend::Cuda.ggml_device(), Some("CUDA0"));
+        assert_eq!(ComputeBackend::Vulkan.ggml_device(), Some("Vulkan0"));
+        assert_eq!(ComputeBackend::Cpu.ggml_device(), Some("CPU"));
+        assert_eq!(serde_json::to_value(ComputeBackend::Vulkan).unwrap(), "vulkan");
+    }
+
+    #[test]
     fn options_become_launch_flags() {
         let mut command = Command::new("mm-server");
         MmServerOptions {
@@ -493,6 +537,7 @@ mod tests {
             split_cfg_forwards: true,
             clamp_fp16: true,
             cuda_folder: None,
+            ..Default::default()
         }
         .apply(&mut command);
         let arguments: Vec<String> = command.get_args().map(|value| value.to_string_lossy().into_owned()).collect();
