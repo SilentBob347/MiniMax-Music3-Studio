@@ -27,9 +27,9 @@ pub const SAMPLE_RATE: u32 = 44_100;
 pub const FRAMES_PER_SECOND: u32 = 25;
 pub const MAX_FRAMES: u32 = 9000;
 
-/// Video memory a run of the default recipe needs, in GB: HOT-Step's measured
-/// model of the q8_0 base, rank 128 with AdamW and a 2048 frame window of
-/// exact attention comes to about 21.
+/// Video memory a run of the default recipe needs, in GB: the q8_0 base, rank
+/// 128 HOT-PiZZA with AdamW and a 1536 frame window of exact attention, as
+/// measured on a 24 GB card with room to spare.
 pub const MIN_VRAM_GB: u32 = 22;
 
 /// One file of the training pack, stored flat in the training models folder.
@@ -54,7 +54,7 @@ pub fn training_file_url(file: &TrainingFile) -> String {
 
 /// What a run is asked for. The defaults are HOT-Step's Balanced recipe for
 /// MM3 planner adapters (`MM3_LM_DEFAULTS` with the Balanced preset), except
-/// for the window: a whole song needs a 32 GB card, and 2048 frames of exact
+/// for the window: a whole song needs a 32 GB card, and 1536 frames of exact
 /// attention fit 24 GB.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -96,7 +96,7 @@ impl Default for Recipe {
             optimizer: "adamw".into(),
             learning_rate: 8e-5,
             warmup: 25,
-            max_frames: 2048,
+            max_frames: 1536,
             attention: "exact".into(),
             depth_loss_weight: 1.0,
         }
@@ -309,6 +309,12 @@ pub fn training_stages(inputs: &TrainingInputs) -> Vec<TrainingStage> {
         "pissa" => train.push(arg("--pissa")),
         _ => {}
     }
+    if recipe.method != "lora" {
+        // A plain rank-2r LoRA on the original base, which the engine merges;
+        // the default delta form needs a residual file no loader here reads.
+        // The frozen factors in F16 halve their memory, as HOT-Step runs it.
+        train.extend([arg("--pissa-standalone"), arg("--pissa-frozen-f16")]);
+    }
     vec![TrainingStage { id: "codes", args: codes_stage }, TrainingStage { id: "train", args: train }]
 }
 
@@ -396,11 +402,12 @@ mod tests {
         let strings = |index: usize| -> Vec<String> { stages[index].args.iter().map(|arg| arg.to_string_lossy().into_owned()).collect() };
         assert!(strings(0).windows(2).any(|pair| pair == ["--ffmpeg", "none"]));
         let train = strings(1);
-        for pair in [["--rank", "128"], ["--optimizer", "adamw"], ["--max-frames", "2048"], ["--attn", "exact"], ["--rank-dropout", "0.1"]] {
+        for pair in [["--rank", "128"], ["--optimizer", "adamw"], ["--max-frames", "1536"], ["--attn", "exact"], ["--rank-dropout", "0.1"]] {
             assert!(train.windows(2).any(|window| window == pair), "{pair:?}");
         }
         assert!(train.iter().any(|arg| arg == "--hot-pizza"));
-        assert!(!train.iter().any(|arg| arg.starts_with("--pissa-")), "a PiSSA cache would export a delta the engine cannot merge");
+        assert!(train.iter().any(|arg| arg == "--pissa-standalone"), "the engine merges plain LoRA only");
+        assert!(!train.iter().any(|arg| arg == "--pissa-cache-dir"), "a PiSSA cache would export a delta the engine cannot merge");
         let plain = TrainingInputs { recipe: Recipe { method: "lora".into(), ..Recipe::default() }, ..inputs };
         assert!(!training_stages(&plain)[1].args.iter().any(|arg| arg == "--hot-pizza" || arg == "--rank-dropout"));
     }
