@@ -23,7 +23,10 @@ $engineSource = Get-Content -Raw (Join-Path $repoRoot 'engines\minimaxmusic-cpp-
 # had written a single object, so the checkout gets a short home; set
 # MM3_ENGINE_BUILD_ROOT to move it to a shorter drive root if even that is tight.
 $engineBuildRoot = if ($env:MM3_ENGINE_BUILD_ROOT) { $env:MM3_ENGINE_BUILD_ROOT } else { $env:TEMP }
-$engineWorktree = Join-Path $engineBuildRoot "mm3-$($engineSource.commit.Substring(0, 8))"
+# One checkout for every pinned commit: moving it to a new commit leaves the
+# build directory in place, so Ninja recompiles only what the commit changed
+# instead of all of ggml and its CUDA kernels.
+$engineWorktree = Join-Path $engineBuildRoot 'mm3-engine'
 
 function Test-CudaToolchain {
     $nvidiaSmi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
@@ -153,7 +156,10 @@ function Invoke-CustomCudaBuild {
     # Ninja drives nvcc and cl directly, so the build does not depend on the
     # CUDA MSBuild integration being installed into this Visual Studio.
     if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { throw 'Ninja is required on PATH.' }
-    $command = "call `"$vcvars`" >nul && cmake -S . -B `"$buildDirectoryName`" -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON $ccache $flashAttention $symbols $settings && cmake --build `"$buildDirectoryName`" --target mm-server --target neural-codec --parallel $parallelism"
+    # VSLANG=1033: Ninja reads header dependencies from cl's /showIncludes, which
+    # a localised Visual Studio prints in its own language; without it an edited
+    # header would not rebuild anything.
+    $command = "set `"VSLANG=1033`" && call `"$vcvars`" >nul && cmake -S . -B `"$buildDirectoryName`" -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON $ccache $flashAttention $symbols $settings && cmake --build `"$buildDirectoryName`" --target mm-server --target neural-codec --parallel $parallelism"
     Push-Location $engineWorktree
     # The compiler's own output must not become this function's return value:
     # PowerShell returns everything a function writes, and the build directory
