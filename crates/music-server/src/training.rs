@@ -446,9 +446,13 @@ impl Training {
         let written = (|| -> Result<()> {
             let audio = dir.join("audio");
             std::fs::create_dir_all(&audio)?;
-            for item in &dataset.items {
-                let source = by_name(&item.file).context("song vanished")?;
-                std::fs::copy(source, audio.join(&item.file)).with_context(|| format!("copy {}", item.file))?;
+            // every song takes a fresh id and file name here, whatever the other
+            // studio called it
+            for item in &mut dataset.items {
+                let source = by_name(&item.file).context("song vanished")?.clone();
+                item.id = new_id();
+                item.file = format!("{}.wav", item.id);
+                std::fs::copy(&source, audio.join(&item.file)).with_context(|| format!("copy {}", item.title))?;
             }
             self.save_dataset(&dataset)
         })();
@@ -522,6 +526,14 @@ impl Training {
             run.status = RunStatus::Interrupted;
             run.finished_at = Some(now());
             let _ = self.save_run(&run);
+        }
+    }
+
+    /// Whether the run going now trains on this dataset.
+    pub async fn dataset_in_use(&self, dataset_id: &str) -> bool {
+        match self.active_run().await {
+            Some(run_id) => self.run(&run_id).is_ok_and(|run| run.dataset_id == dataset_id),
+            None => false,
         }
     }
 
