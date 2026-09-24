@@ -10,6 +10,7 @@ mod assistant;
 mod assistant_runtime;
 mod audio_pcm;
 mod downloads;
+mod cuda_build;
 mod engine_runtime;
 mod lyrics_sync;
 mod credentials;
@@ -353,7 +354,8 @@ impl EngineOptions {
             max_seq: self.max_seq,
             disable_flash_attention: self.disable_flash_attention,
             split_cfg_forwards: self.split_cfg_forwards,
-            clamp_fp16: self.clamp_fp16,
+            clamp_fp16: self.clamp_fp16 || cuda_build::accumulates_in_fp16(),
+            cuda_folder: cuda_build::current().map(cuda_build::CudaBuild::folder),
         }
     }
 }
@@ -2973,10 +2975,13 @@ async fn restart_engine(state: &AppState) -> Result<(), String> {
     // is not a slow start, it is no start at all. This is the path the studio
     // actually takes on launch, so the fetch belongs here rather than only in
     // the endpoint nothing calls.
-    if !state.engine_runtime.is_ready() {
+    let Some(build) = cuda_build::current() else {
+        return Err(cuda_build::UNSUPPORTED.into());
+    };
+    if !state.engine_runtime.is_ready(build) {
         state
             .engine_runtime
-            .install_missing()
+            .install_missing(build)
             .await
             .map_err(|error| format!("the engine's CUDA libraries could not be downloaded: {error}"))?;
     }
@@ -3452,12 +3457,13 @@ async fn compose_setup_status(state: &AppState, manager_status: model_manager::M
         // an engine that starts in three seconds and one that starts in ten
         // minutes. A spinner that says nothing for ten minutes is the same
         // screen as a spinner that is stuck.
-        let runtime_total = engine_runtime::ASSETS.iter().map(|asset| asset.bytes).sum::<u64>();
+        let runtime_build = cuda_build::current();
+        let runtime_total = runtime_build.map(|build| engine_runtime::cublas_asset(build).bytes).unwrap_or(0);
         let runtime_active = state.engine_runtime.downloader().active().await;
         fields.insert(
             "engine_runtime".into(),
             serde_json::json!({
-                "ready": state.engine_runtime.is_ready(),
+                "ready": runtime_build.is_some_and(|build| state.engine_runtime.is_ready(build)),
                 "downloading": runtime_active.is_some(),
                 "downloaded_bytes": runtime_active.as_ref().map(|progress| progress.downloaded_bytes).unwrap_or(0),
                 "total_bytes": runtime_total,

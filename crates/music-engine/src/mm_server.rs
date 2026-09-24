@@ -68,6 +68,10 @@ pub struct MmServerOptions {
     pub split_cfg_forwards: bool,
     /// `--clamp-fp16`: clamp hidden states to the FP16 range.
     pub clamp_fp16: bool,
+    /// The folder beside the executable whose `ggml-cuda.dll` the engine
+    /// loads, passed as `MM3_CUDA_BACKEND`. A release keeps one CUDA backend
+    /// per toolkit in folders of their own.
+    pub cuda_folder: Option<&'static str>,
 }
 
 impl MmServerOptions {
@@ -90,6 +94,24 @@ impl MmServerOptions {
         if self.clamp_fp16 {
             command.arg("--clamp-fp16");
         }
+    }
+}
+
+impl MmServerLaunchConfig {
+    /// The CUDA backend the engine loads. A developer build keeps its one
+    /// `ggml-cuda.dll` beside the executable, which ggml finds by itself; a
+    /// release has only the folders, and one missing is a broken install.
+    pub fn cuda_backend(&self) -> Result<Option<PathBuf>> {
+        let Some(folder) = self.options.cuda_folder else { return Ok(None) };
+        let directory = self.executable.parent().context("the engine executable has no folder")?;
+        let backend = directory.join(folder).join("ggml-cuda.dll");
+        if backend.is_file() {
+            return Ok(Some(backend));
+        }
+        if directory.join("ggml-cuda.dll").is_file() {
+            return Ok(None);
+        }
+        bail!("the engine's CUDA backend {} is missing; reinstall the studio", backend.display())
     }
 }
 
@@ -192,6 +214,14 @@ impl MmServerSupervisor {
             command.arg("--adapters").arg(adapters);
         }
         self.config.options.apply(&mut command);
+        match self.config.cuda_backend()? {
+            Some(backend) => {
+                command.env("MM3_CUDA_BACKEND", backend);
+            }
+            None => {
+                command.env_remove("MM3_CUDA_BACKEND");
+            }
+        }
         command.stdin(Stdio::null());
         // Everything the engine says while it is starting - loading weights,
         // choosing a device, failing - happens before its HTTP log exists.
@@ -462,6 +492,7 @@ mod tests {
             disable_flash_attention: true,
             split_cfg_forwards: true,
             clamp_fp16: true,
+            cuda_folder: None,
         }
         .apply(&mut command);
         let arguments: Vec<String> = command.get_args().map(|value| value.to_string_lossy().into_owned()).collect();

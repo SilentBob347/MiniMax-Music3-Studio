@@ -6,7 +6,9 @@ param(
     [ValidateSet('auto', 'cuda', 'vulkan', 'all')]
     [string]$RuntimeBackend = 'auto',
     [ValidateSet('nsis')]
-    [string]$BundleTarget = 'nsis'
+    [string]$BundleTarget = 'nsis',
+    # The CUDA 12 toolkit of the engine's second CUDA backend.
+    [string]$Cuda12Root = $env:CUDA_PATH_V12_9
 )
 
 $ErrorActionPreference = 'Stop'
@@ -98,7 +100,7 @@ try {
     # every cargo warning into a terminating error. Exit codes are the truth
     # here, so they are checked directly.
     $ErrorActionPreference = 'Continue'
-    & (Join-Path $PSScriptRoot 'build-minimax-runtime.ps1') -OutputDirectory $engineResourceRoot -RuntimeBackend $RuntimeBackend -CudaArchitecture universal
+    & (Join-Path $PSScriptRoot 'build-minimax-runtime.ps1') -OutputDirectory $engineResourceRoot -RuntimeBackend $RuntimeBackend -CudaArchitecture universal -Cuda12Root $Cuda12Root
     if ($LASTEXITCODE -ne 0) { throw "the engine runtime build failed with exit code $LASTEXITCODE" }
     # The VST host follows the trainer's HOT-Step commit; rebuilt only when that moves.
     $trainSource = Get-Content -Raw (Join-Path $repoRoot 'engines\music-train-source.json') | ConvertFrom-Json

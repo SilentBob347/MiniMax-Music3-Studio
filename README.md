@@ -98,10 +98,12 @@ The same six screens are in the interface language you read: [Русский](ht
 
 ## What it needs
 
-Windows 10/11 x64 and an NVIDIA card of the **GTX 16 / RTX 20 generation or newer** —
-Turing, Ampere, Ada and Blackwell. The engine ships compiled for those architectures;
-Pascal and older (GTX 10 series and down) are not supported, because the CUDA 13 toolkit
-that builds it dropped them.
+Windows 10/11 x64 and an NVIDIA card **from the GTX 900 series on**. The studio ships two
+CUDA builds of the engine and picks the one your card and driver run: CUDA 13 for Turing
+and newer (GTX 16, RTX 20–50, Tesla T4, A100, RTX A-series, L4/L40, H100) with driver 580
+or newer, CUDA 12 for Maxwell, Pascal and Volta (GTX 900/1000, Titan X/Xp/V, Tesla M40,
+P40, P100, V100) and for any card on a driver from 525 to 579. Both carry compiled code for
+every one of those architectures, so nothing is left for the driver to compile.
 
 Training a LoRA is optional and needs an NVIDIA RTX 30-series card or newer with 22 GB of
 VRAM (an RTX 3090, 4090 or 5090) and about 10.5 GB more disk for the trainer and its

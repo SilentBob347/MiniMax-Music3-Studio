@@ -5,7 +5,11 @@ param(
     [ValidateSet('auto', 'cuda', 'vulkan', 'all')]
     [string]$RuntimeBackend = 'auto',
     [ValidateSet('universal', 'native', 'sm_89')]
-    [string]$CudaArchitecture = 'universal'
+    [string]$CudaArchitecture = 'universal',
+    # CUDA 13 dropped Maxwell, Pascal and Volta, so a universal build adds a
+    # second ggml-cuda from a CUDA 12 toolkit: the redist archives unpacked
+    # into one folder, or an installed toolkit.
+    [string]$Cuda12Root = $env:CUDA_PATH_V12_9
 )
 
 $ErrorActionPreference = 'Stop'
@@ -113,9 +117,13 @@ function Invoke-CustomCudaBuild {
         # A release must run on other people's machines, so both halves are
         # spelled out: GGML_NATIVE off keeps ggml's CPU kernels off this exact
         # processor's instruction set, and the architecture list covers the
-        # cards - PTX for Turing and Ampere, device code for the RTX 30, 40 and
-        # 50 series. Upstream's own script leaves both at "whatever this machine
-        # is", which produces a binary only this machine can run.
+        # cards - device code for the GTX 16 and RTX 20 through 50 series. A card
+        # left to PTX needs a driver as new as this toolkit: an older one fails
+        # the first kernel with "PTX was compiled with an unsupported toolchain".
+        # Upstream's own script leaves both at "whatever this machine is", which
+        # produces a binary only this machine can run.
+        # The backends load at run time (GGML_BACKEND_DL), so the CUDA 12
+        # backend of Invoke-Cuda12Build can take this one's place.
         # The trailing 120-virtual follows NVIDIA's "Building for Maximum
         # Compatibility" rule: without PTX for the newest architecture there is
         # nothing to JIT from and the kernel launch simply fails. ggml rewrites
@@ -123,7 +131,7 @@ function Invoke-CustomCudaBuild {
         # tensor core instructions that only exist in 12Xa - so this buys PTX
         # for Blackwell variants, not for whatever comes after them. ggml's own
         # comment puts that boundary at Rubin.
-        'universal' { '-DGGML_NATIVE=OFF -DCMAKE_CUDA_ARCHITECTURES=75-virtual;80-virtual;86-real;89-real;90-virtual;120a-real;120-virtual' }
+        'universal' { '-DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON "-DCMAKE_CUDA_ARCHITECTURES=75-real;80-real;86-real;89-real;90-real;120a-real;120-virtual"' }
         'native' { '-DCMAKE_CUDA_ARCHITECTURES=native' }
         'sm_89' { '-DCMAKE_CUDA_ARCHITECTURES=89' }
         default { throw "No custom CMake architecture is defined for '$CudaArchitecture'." }
@@ -159,7 +167,11 @@ function Invoke-CustomCudaBuild {
     # VSLANG=1033: Ninja reads header dependencies from cl's /showIncludes, which
     # a localised Visual Studio prints in its own language; without it an edited
     # header would not rebuild anything.
-    $command = "set `"VSLANG=1033`" && call `"$vcvars`" >nul && cmake -S . -B `"$buildDirectoryName`" -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON $ccache $flashAttention $symbols $settings && cmake --build `"$buildDirectoryName`" --target mm-server --target neural-codec --parallel $parallelism"
+    # With runtime-loaded backends nothing links against ggml-cuda or the CPU
+    # variants, so naming the two executables alone would skip them: the
+    # universal build builds the whole tree, as upstream's buildall does.
+    $targets = if ($CudaArchitecture -eq 'universal') { '' } else { '--target mm-server --target neural-codec' }
+    $command = "set `"VSLANG=1033`" && call `"$vcvars`" >nul && cmake -S . -B `"$buildDirectoryName`" -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON $ccache $flashAttention $symbols $settings && cmake --build `"$buildDirectoryName`" $targets --parallel $parallelism"
     Push-Location $engineWorktree
     # The compiler's own output must not become this function's return value:
     # PowerShell returns everything a function writes, and the build directory
@@ -167,6 +179,32 @@ function Invoke-CustomCudaBuild {
     try { & cmd.exe /d /s /c $command | Out-Host } finally { Pop-Location }
     if ($LASTEXITCODE -ne 0) { throw "minimaxmusic.cpp CUDA build for $CudaArchitecture failed." }
     return $buildDirectoryName
+}
+
+# The CUDA 12 backend: ggml-cuda alone, from the same source, for the cards
+# CUDA 13 no longer targets and for drivers older than CUDA 13. Device code
+# for every architecture, including Turing and newer for those old drivers.
+function Invoke-Cuda12Build {
+    $nvcc = Join-Path $Cuda12Root 'bin\nvcc.exe'
+    if (-not (Test-Path $nvcc)) { throw "The CUDA 12 backend needs a CUDA 12 toolkit; nvcc.exe is missing under '$Cuda12Root'. Set -Cuda12Root or CUDA_PATH_V12_9." }
+    $root = $Cuda12Root.Replace('\', '/')
+    $buildDirectoryName = 'build-cuda12-universal'
+    # nvcc 12 predates this Visual Studio; ggml's own CUDA 12 release builds
+    # pass the same switch. -Wno-deprecated-gpu-targets silences the notice
+    # that CUDA 12 is the last toolkit for Maxwell, Pascal and Volta.
+    $cudaFlags = '-allow-unsupported-compiler -Wno-deprecated-gpu-targets'
+    $flags = "-DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON -DGGML_CUDA=ON -DGGML_CUDA_FA_ALL_QUANTS=ON `"-DCMAKE_CUDA_ARCHITECTURES=52-real;60-real;61-real;70-real;75-real;80-real;86-real;89-real;90-real;120a-real`" `"-DCMAKE_CUDA_COMPILER=$root/bin/nvcc.exe`" `"-DCUDAToolkit_ROOT=$root`" `"-DCMAKE_CUDA_FLAGS=$cudaFlags`""
+    $ccache = if (Get-Command ccache -ErrorAction SilentlyContinue) { '-DGGML_CCACHE=ON' } else { '-DGGML_CCACHE=OFF' }
+    $symbols = '-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=ProgramDatabase -DCMAKE_EXE_LINKER_FLAGS=/DEBUG -DCMAKE_SHARED_LINKER_FLAGS=/DEBUG'
+    $parallelism = [Math]::Max(1, [Environment]::ProcessorCount)
+    $vcvars = Get-VcVars64
+    $command = "set `"VSLANG=1033`" && set `"CUDA_PATH=$Cuda12Root`" && call `"$vcvars`" >nul && cmake -S . -B `"$buildDirectoryName`" -G Ninja -DCMAKE_BUILD_TYPE=Release $ccache $symbols $flags && cmake --build `"$buildDirectoryName`" --target ggml-cuda --parallel $parallelism"
+    Push-Location $engineWorktree
+    try { & cmd.exe /d /s /c $command | Out-Host } finally { Pop-Location }
+    if ($LASTEXITCODE -ne 0) { throw 'minimaxmusic.cpp CUDA 12 backend build failed.' }
+    $dll = Get-ChildItem -Path (Join-Path $engineWorktree $buildDirectoryName) -Recurse -Filter 'ggml-cuda.dll' -File | Select-Object -First 1
+    if (-not $dll) { throw 'The CUDA 12 build completed without ggml-cuda.dll.' }
+    return $dll.DirectoryName
 }
 
 function Invoke-RuntimeBuild {
@@ -193,6 +231,8 @@ function Invoke-RuntimeBuild {
 
 Sync-PinnedSource
 $buildDirectoryName = Invoke-RuntimeBuild
+$shipsTwoCudaBuilds = $CudaArchitecture -eq 'universal' -and (Resolve-RuntimeBackend) -eq 'cuda'
+$cuda12Directory = if ($shipsTwoCudaBuilds) { Invoke-Cuda12Build } else { $null }
 $runtime = @(
     (Join-Path $engineWorktree "$buildDirectoryName\Release\mm-server.exe"),
     (Join-Path $engineWorktree "$buildDirectoryName\bin\mm-server.exe"),
@@ -207,6 +247,22 @@ Copy-Item $runtime (Join-Path $resolvedOutputDirectory 'mm-server.exe') -Force
 $codec = Join-Path (Split-Path -Parent $runtime) 'neural-codec.exe'
 if (Test-Path $codec) { Copy-Item $codec (Join-Path $resolvedOutputDirectory 'neural-codec.exe') -Force }
 Get-ChildItem -Path (Split-Path -Parent $runtime) -Filter '*.dll' -File | Copy-Item -Destination $resolvedOutputDirectory -Force
+# Each CUDA backend in a folder of its own, none beside the executable: the
+# studio names the one the card and its driver run in MM3_CUDA_BACKEND. The
+# single ggml-cpu.dll of the old static layout gives way to the CPU variants.
+if ($shipsTwoCudaBuilds) {
+    foreach ($build in @(@{ Folder = 'cuda13'; Source = (Split-Path -Parent $runtime) }, @{ Folder = 'cuda12'; Source = $cuda12Directory })) {
+        $folder = Join-Path $resolvedOutputDirectory $build.Folder
+        New-Item -ItemType Directory -Force -Path $folder | Out-Null
+        $source = Join-Path $build.Source 'ggml-cuda.dll'
+        if (-not (Test-Path $source)) { throw "ggml-cuda.dll is missing from the $($build.Folder) build." }
+        Copy-Item $source $folder -Force
+    }
+    foreach ($stale in @('ggml-cuda.dll', 'ggml-cpu.dll')) {
+        $path = Join-Path $resolvedOutputDirectory $stale
+        if (Test-Path $path) { Remove-Item $path -Force }
+    }
+}
 # The engine's own symbols travel with it, so a crash address on someone else's
 # machine can be read here.
 Get-ChildItem -Path (Split-Path -Parent $runtime) -Filter 'mm-server.pdb' -File -ErrorAction SilentlyContinue |
@@ -221,5 +277,6 @@ if (-not (Test-Path (Join-Path $resolvedOutputDirectory 'mm-server.exe'))) { thr
 [pscustomobject]@{
     backend = Resolve-RuntimeBackend
     cuda_architecture = $CudaArchitecture
+    cuda_builds = if ($shipsTwoCudaBuilds) { @('cuda13', 'cuda12') } else { @() }
     runtime = Join-Path $resolvedOutputDirectory 'mm-server.exe'
 } | ConvertTo-Json -Compress
