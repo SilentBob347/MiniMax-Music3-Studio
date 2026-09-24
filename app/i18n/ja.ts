@@ -1143,7 +1143,7 @@ export const ja = {
     computeBackend_cuda: 'CUDA',
     computeBackend_vulkan: 'Vulkan',
     computeBackend_cpu: 'プロセッサ',
-    computeBackendHint_auto: '最適なデバイスを自動選択：NVIDIA は CUDA、それ以外は Vulkan（AMD と Intel では実験的）、GPU がなければプロセッサ。',
+    computeBackendHint_auto: 'NVIDIA では CUDA、CUDA が動かなければ Vulkan（AMD と Intel では実験的）、それも動かなければプロセッサ。失敗したデバイスはスタジオを再起動するまで使いません。',
     computeBackendHint_cuda: 'NVIDIA 専用で、そこでは最速。cuBLAS が必要で、初回起動時に一度だけダウンロードします。',
     computeBackendHint_vulkan: 'カード自身のドライバーで動作し、ダウンロードは不要です。NVIDIA で確認済み、AMD と Intel では実験的です。',
     computeBackendHint_cpu: 'どこでも動きますが、GPU より何倍も時間がかかります。',

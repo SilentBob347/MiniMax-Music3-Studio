@@ -1148,7 +1148,7 @@ export const en = {
     computeBackend_cuda: 'CUDA',
     computeBackend_vulkan: 'Vulkan',
     computeBackend_cpu: 'Processor',
-    computeBackendHint_auto: 'The best device found: CUDA on an NVIDIA card, Vulkan on others (experimental on AMD and Intel), the processor when there is no GPU.',
+    computeBackendHint_auto: 'CUDA on an NVIDIA card; if CUDA does not work here, Vulkan (experimental on AMD and Intel); if that does not either, the processor. A device that fails is skipped until the studio restarts.',
     computeBackendHint_cuda: 'NVIDIA only, and the fastest there. Needs cuBLAS, downloaded once on the first start.',
     computeBackendHint_vulkan: 'Through the card\'s own driver, nothing to download. Verified on NVIDIA; experimental on AMD and Intel.',
     computeBackendHint_cpu: 'Works everywhere, but a song takes many times longer than on a GPU.',

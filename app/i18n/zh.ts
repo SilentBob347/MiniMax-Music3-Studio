@@ -1143,7 +1143,7 @@ export const zh = {
     computeBackend_cuda: 'CUDA',
     computeBackend_vulkan: 'Vulkan',
     computeBackend_cpu: '处理器',
-    computeBackendHint_auto: '自动选择最佳设备：NVIDIA 显卡用 CUDA，其他显卡用 Vulkan（AMD 和 Intel 为实验性质），没有显卡时用处理器。',
+    computeBackendHint_auto: 'NVIDIA 显卡用 CUDA；CUDA 不可用时用 Vulkan（AMD 和 Intel 为实验性质）；Vulkan 也不可用时用处理器。失败的设备在工作室重启前会被跳过。',
     computeBackendHint_cuda: '仅限 NVIDIA，也是其上最快的方式。需要 cuBLAS，首次启动时下载一次。',
     computeBackendHint_vulkan: '通过显卡自身驱动运行，无需下载。已在 NVIDIA 上验证；在 AMD 和 Intel 上为实验性质。',
     computeBackendHint_cpu: '任何机器都能运行，但一首歌比在显卡上慢很多倍。',

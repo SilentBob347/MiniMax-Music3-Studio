@@ -1147,7 +1147,7 @@ export const ru = {
     computeBackend_cuda: 'CUDA',
     computeBackend_vulkan: 'Vulkan',
     computeBackend_cpu: 'Процессор',
-    computeBackendHint_auto: 'Лучшее найденное устройство: CUDA на картах NVIDIA, Vulkan на остальных (на AMD и Intel — экспериментально), процессор, если видеокарты нет.',
+    computeBackendHint_auto: 'CUDA на NVIDIA; если CUDA здесь не работает — Vulkan (на AMD и Intel — экспериментально); если и он не работает — процессор. Нерабочее устройство пропускается до перезапуска студии.',
     computeBackendHint_cuda: 'Только NVIDIA, и там самый быстрый. Нужен cuBLAS — скачается один раз при первом запуске.',
     computeBackendHint_vulkan: 'Через драйвер самой карты, ничего скачивать не нужно. Проверено на NVIDIA; на AMD и Intel — экспериментально.',
     computeBackendHint_cpu: 'Работает везде, но песня считается во много раз дольше, чем на видеокарте.',

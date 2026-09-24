@@ -1143,7 +1143,7 @@ export const ko = {
     computeBackend_cuda: 'CUDA',
     computeBackend_vulkan: 'Vulkan',
     computeBackend_cpu: '프로세서',
-    computeBackendHint_auto: '가장 좋은 장치를 고릅니다: NVIDIA는 CUDA, 그 밖에는 Vulkan(AMD와 Intel에서는 실험적), 그래픽카드가 없으면 프로세서.',
+    computeBackendHint_auto: 'NVIDIA에서는 CUDA, CUDA가 안 되면 Vulkan(AMD와 Intel에서는 실험적), 그것도 안 되면 프로세서. 실패한 장치는 스튜디오를 다시 시작할 때까지 건너뜁니다.',
     computeBackendHint_cuda: 'NVIDIA 전용이며 가장 빠릅니다. cuBLAS가 필요하며 첫 실행 때 한 번 내려받습니다.',
     computeBackendHint_vulkan: '그래픽카드 자체 드라이버로 동작하며 내려받을 것이 없습니다. NVIDIA에서 확인했고 AMD와 Intel에서는 실험적입니다.',
     computeBackendHint_cpu: '어디서나 동작하지만 그래픽카드보다 몇 배 오래 걸립니다.',

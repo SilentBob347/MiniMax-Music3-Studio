@@ -60,6 +60,12 @@ struct AppState {
     /// Owned local engine process, when this service started one.
     engine: Arc<tokio::sync::Mutex<Option<music_engine::mm_server::MmServerSupervisor>>>,
     engine_options: Arc<RwLock<EngineOptions>>,
+    /// Devices that failed under Auto in this session - the engine did not
+    /// start on them, or died with a CUDA or Vulkan error - and the one the
+    /// running engine computes on. Auto walks CUDA, Vulkan, the processor and
+    /// skips the failed; a restart of the studio tries them all again.
+    failed_devices: Arc<RwLock<Vec<music_engine::mm_server::ComputeBackend>>>,
+    active_device: Arc<RwLock<Option<music_engine::mm_server::ComputeBackend>>>,
     /// The CUDA libraries the engine binary imports. They are downloaded, not
     /// installed, so the engine cannot start until they are on disk.
     engine_runtime: Arc<engine_runtime::EngineRuntime>,
@@ -342,6 +348,26 @@ impl EngineOptions {
         self.max_batch.unwrap_or(1).max(1)
     }
 
+    /// The devices a start tries, in order. A device chosen in Settings is
+    /// the only one, whatever happens to it. Auto goes CUDA, Vulkan, the
+    /// processor: CUDA when one of its builds runs this card and driver, then
+    /// Vulkan, which fails fast on a machine without a Vulkan card, and the
+    /// processor always, last.
+    fn device_chain(&self, failed: &[music_engine::mm_server::ComputeBackend]) -> Vec<music_engine::mm_server::ComputeBackend> {
+        use music_engine::mm_server::ComputeBackend;
+        if self.backend != ComputeBackend::Auto {
+            return vec![self.backend];
+        }
+        let mut chain = Vec::new();
+        if cuda_build::current().is_some() {
+            chain.push(ComputeBackend::Cuda);
+        }
+        chain.push(ComputeBackend::Vulkan);
+        chain.retain(|device| !failed.contains(device));
+        chain.push(ComputeBackend::Cpu);
+        chain
+    }
+
     /// The CUDA build the engine will compute on, and so the cuBLAS it needs:
     /// chosen outright, or left to ggml on an NVIDIA card one of the builds
     /// runs on. None on Vulkan and the processor.
@@ -530,6 +556,8 @@ pub async fn serve() -> anyhow::Result<()> {
         library: library::Library::open_default()?,
         engine: Arc::new(tokio::sync::Mutex::new(None)),
         engine_options: Arc::new(RwLock::new(persisted.as_ref().map(|settings| settings.engine_options).unwrap_or_default())),
+        failed_devices: Arc::new(RwLock::new(Vec::new())),
+        active_device: Arc::new(RwLock::new(None)),
         engine_runtime: Arc::new(engine_runtime::EngineRuntime::new(&engine_bundle_root())),
         assistant: Arc::new(RwLock::new(persisted.as_ref().map(|settings| settings.assistant.clone()).unwrap_or_default())),
         assistant_runtime: Arc::new(assistant_runtime::AssistantRuntime::new(
@@ -690,6 +718,16 @@ pub async fn serve() -> anyhow::Result<()> {
                         // explains a log which suddenly starts again from
                         // "Listening on". Written once, not once a cycle.
                         music_engine::mm_server::note_in_log("the engine stopped answering; restarting it");
+                        // Under Auto a device that died of its own fault is
+                        // not tried again: the restart moves down the chain.
+                        let auto = state.engine_options.read().await.backend == music_engine::mm_server::ComputeBackend::Auto;
+                        let active = *state.active_device.read().await;
+                        if let Some(device) = active.filter(|device| auto && *device != music_engine::mm_server::ComputeBackend::Cpu) {
+                            if describes_device_failure(&last_run_log().to_lowercase()) {
+                                music_engine::mm_server::note_in_log(&format!("{} failed on this machine; leaving it for this session", device_name(device)));
+                                state.failed_devices.write().await.push(device);
+                            }
+                        }
                     }
                     match restart_engine(&state).await {
                         Ok(()) => complained = false,
@@ -2992,35 +3030,105 @@ async fn restart_engine(state: &AppState) -> Result<(), String> {
     // is not a slow start, it is no start at all. This is the path the studio
     // actually takes on launch, so the fetch belongs here rather than only in
     // the endpoint nothing calls.
-    let chosen = *state.engine_options.read().await;
-    if chosen.backend == music_engine::mm_server::ComputeBackend::Cuda && cuda_build::current().is_none() {
+    let options = *state.engine_options.read().await;
+    if options.backend == music_engine::mm_server::ComputeBackend::Cuda && cuda_build::current().is_none() {
         return Err(cuda_build::UNSUPPORTED.into());
     }
-    match chosen.cuda_build() {
-        Some(build) if !state.engine_runtime.is_ready(build) => {
-            state
-                .engine_runtime
-                .install_missing(build)
+    let chain = options.device_chain(&state.failed_devices.read().await);
+    let mut last_error = String::new();
+    for (index, device) in chain.iter().copied().enumerate() {
+        let attempt = EngineOptions { backend: device, ..options };
+        match attempt.cuda_build() {
+            Some(build) if !state.engine_runtime.is_ready(build) => {
+                state
+                    .engine_runtime
+                    .install_missing(build)
+                    .await
+                    .map_err(|error| format!("the engine's CUDA libraries could not be downloaded: {error}"))?;
+            }
+            Some(_) => {}
+            None => engine_runtime::ensure_vc_runtime()
                 .await
-                .map_err(|error| format!("the engine's CUDA libraries could not be downloaded: {error}"))?;
+                .map_err(|error| format!("the Visual C++ runtime could not be installed: {error}"))?,
         }
-        Some(_) => {}
-        None => engine_runtime::ensure_vc_runtime()
-            .await
-            .map_err(|error| format!("the Visual C++ runtime could not be installed: {error}"))?,
+        // The engine loads eleven gigabytes of weights the moment it starts.
+        // If the writing assistant is still holding the card, it does not finish.
+        free_the_card_for_the_engine(state).await;
+        let config = engine_location(attempt)
+            .resolve()
+            .map_err(|error| format!("the local engine runtime was not found: {error}"))?;
+        let mut engine = music_engine::mm_server::MmServerSupervisor::new(config).map_err(|error| error.to_string())?;
+        match tokio::task::block_in_place(|| engine.ensure_started(std::time::Duration::from_secs(60))) {
+            Ok(_) => {
+                *supervisor = Some(engine);
+                *state.active_device.write().await = Some(device);
+                if options.backend == music_engine::mm_server::ComputeBackend::Auto {
+                    music_engine::mm_server::note_in_log(&format!("computing on {}", device_name(device)));
+                }
+                return Ok(());
+            }
+            Err(error) => {
+                last_error = format!("the local engine did not start: {error}");
+                // Only Auto moves on, and never past a card that ran out of
+                // memory: Vulkan has no more of it, and the reason is shown.
+                let next = chain.get(index + 1).copied();
+                let out_of_memory = describes_exhausted_memory(&last_run_log().to_lowercase());
+                match next {
+                    Some(next) if options.backend == music_engine::mm_server::ComputeBackend::Auto && !out_of_memory => {
+                        music_engine::mm_server::note_in_log(&format!(
+                            "{} did not start ({error}); trying {}",
+                            device_name(device),
+                            device_name(next)
+                        ));
+                        state.failed_devices.write().await.push(device);
+                    }
+                    _ => return Err(last_error),
+                }
+            }
+        }
     }
-    // The engine loads eleven gigabytes of weights the moment it starts. If
-    // the writing assistant is still holding the card, it does not finish.
-    free_the_card_for_the_engine(state).await;
-    let options = *state.engine_options.read().await;
-    let config = engine_location(options)
-        .resolve()
-        .map_err(|error| format!("the local engine runtime was not found: {error}"))?;
-    let mut engine = music_engine::mm_server::MmServerSupervisor::new(config).map_err(|error| error.to_string())?;
-    tokio::task::block_in_place(|| engine.ensure_started(std::time::Duration::from_secs(60)))
-        .map_err(|error| format!("the local engine did not start: {error}"))?;
-    *supervisor = Some(engine);
-    Ok(())
+    Err(last_error)
+}
+
+/// The device's name as the settings show it.
+fn device_name(device: music_engine::mm_server::ComputeBackend) -> &'static str {
+    use music_engine::mm_server::ComputeBackend;
+    match device {
+        ComputeBackend::Auto => "Auto",
+        ComputeBackend::Cuda => "CUDA",
+        ComputeBackend::Vulkan => "Vulkan",
+        ComputeBackend::Cpu => "the processor",
+    }
+}
+
+/// The engine log since the last start, where the reason a run ended is.
+fn last_run_log() -> String {
+    let tail = music_engine::mm_server::startup_log_tail(400);
+    let start = tail.iter().rposition(|line| line.contains("---- starting")).unwrap_or(0);
+    tail[start..].join("\n")
+}
+
+/// Whether a lowercased engine log says the compute device itself failed -
+/// a CUDA or Vulkan error, a device lost, the engine's self-test - as opposed
+/// to running out of memory, which another device would not cure.
+fn describes_device_failure(log: &str) -> bool {
+    if describes_exhausted_memory(log) {
+        return false;
+    }
+    [
+        "cuda error",
+        "no kernel image",
+        "unsupported toolchain",
+        "ggml_cuda_compute_forward",
+        "fatal: self-test",
+        "_cuda_backend=",
+        "devicelost",
+        "device lost",
+        "vk::",
+        "ggml_vulkan: error",
+    ]
+    .iter()
+    .any(|marker| log.contains(marker))
 }
 
 /// Where the packaged or developer-built `mm-server` lives. Every value is an
@@ -5640,6 +5748,28 @@ fn api_error(status: StatusCode, error: String) -> (StatusCode, Json<ApiError>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_device_failure_is_told_from_running_out_of_memory() {
+        let ptx = "ggml_cuda_compute_forward: get_rows failed\ncuda error: the provided ptx was compiled with an unsupported toolchain.";
+        assert!(describes_device_failure(ptx));
+        assert!(describes_device_failure("[load] fatal: self-test on vulkan0 failed (status -1, result nan, expected 132)"));
+        assert!(describes_device_failure("[load] fatal: mm3_cuda_backend=c:\\x\\cuda13\\ggml-cuda.dll did not load"));
+        assert!(!describes_device_failure("cuda error: out of memory\ncudamalloc failed"));
+        assert!(!describes_device_failure("[load] self-test on cuda0: ok (1.2 ms)\n[server] listening on 127.0.0.1:8085"));
+    }
+
+    #[test]
+    fn a_device_chosen_in_settings_is_the_only_one_tried() {
+        use music_engine::mm_server::ComputeBackend;
+        for device in [ComputeBackend::Cuda, ComputeBackend::Vulkan, ComputeBackend::Cpu] {
+            let options = EngineOptions { backend: device, ..EngineOptions::default() };
+            assert_eq!(options.device_chain(&[device]), vec![device]);
+        }
+        let auto = EngineOptions::default();
+        assert_eq!(auto.device_chain(&[ComputeBackend::Cuda, ComputeBackend::Vulkan]), vec![ComputeBackend::Cpu]);
+        assert_eq!(auto.device_chain(&[]).last(), Some(&ComputeBackend::Cpu));
+    }
 
     #[test]
     fn adapters_travel_as_engine_fields_with_every_slot_spelled_out() {
