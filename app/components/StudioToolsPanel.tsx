@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Check, Copy, Download, FileAudio, Loader2, Music, Play, RefreshCw, Scissors, Search, SlidersHorizontal, Wand2 } from 'lucide-react';
 import { mapNativeLibrarySong } from '../services/nativeLibrary';
+import { MidiTool } from './midi/MidiTool';
 import { useI18n } from '../context/I18nContext';
 import { DevicePicker } from './DevicePicker';
 import { transcribeWithNativeOpenRouter } from '../services/nativeOpenRouter';
@@ -397,6 +398,9 @@ export function StudioToolsPanel({ initialSongId }: { initialSongId?: string | n
             <p role="alert" className="mt-3 select-text rounded-lg bg-rose-500/10 px-3 py-2 text-xs text-rose-700 [overflow-wrap:anywhere] dark:text-rose-300">{run.error}</p>
           )}
         </section>
+
+        {/* Audio to MIDI, on the track chosen above. */}
+        <MidiTool songId={songId} songTitle={songs.find(song => song.id === songId)?.title ?? ''} card={CARD} />
 
         {/* The audio editor, on the track chosen above or on any stem it produced. */}
         <section className={CARD}>

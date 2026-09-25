@@ -5,6 +5,7 @@ import { useI18n } from '../context/I18nContext';
 import { openExternal } from '../services/externalLinks';
 import { apiUrl } from '../services/apiBase';
 import { downloadSongAudio } from '../services/songDownload';
+import { openMidi } from '../services/openStems';
 import {
     Clapperboard,
     Edit3,
@@ -17,6 +18,7 @@ import {
     Mic2,
     Scissors,
     Wand2,
+    Piano,
 } from 'lucide-react';
 
 interface SongDropdownMenuProps {
@@ -217,11 +219,18 @@ export const SongDropdownMenu: React.FC<SongDropdownMenuProps> = ({
                 />
             )}
             {song.audioUrl && (
-                <MenuItem
-                    icon={<Wand2 size={14} />}
-                    label={t('processMenu')}
-                    onClick={() => handleAction(() => window.dispatchEvent(new CustomEvent('mm3:process-song', { detail: song })))}
-                />
+                <>
+                    <MenuItem
+                        icon={<Wand2 size={14} />}
+                        label={t('processMenu')}
+                        onClick={() => handleAction(() => window.dispatchEvent(new CustomEvent('mm3:process-song', { detail: song })))}
+                    />
+                    <MenuItem
+                        icon={<Piano size={14} />}
+                        label={t('midiMenu')}
+                        onClick={() => handleAction(() => openMidi(song))}
+                    />
+                </>
             )}
             {onSeparateStems && (
                 <MenuItem
