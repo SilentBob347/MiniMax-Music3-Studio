@@ -19,13 +19,10 @@ interface RightSidebarProps {
     onClose?: () => void;
     onOpenCoverRegen?: () => void;
     onReuse?: (song: Song) => void;
-    onReplayMusic?: (song: Song) => void;
     onSongUpdate?: (song: Song) => void;
     onNavigateToProfile?: (username: string) => void;
     isLiked?: boolean;
     onToggleLike?: (songId: string) => void;
-    onDelete?: (song: Song) => void;
-    onAddToPlaylist?: (song: Song) => void;
     onPlay?: (song: Song) => void;
     isPlaying?: boolean;
     currentSong?: Song | null;
@@ -142,7 +139,7 @@ const KaraokeAction: React.FC<{ song: Song; onDone?: (lrc: string) => void }> = 
     );
 };
 
-export const RightSidebar: React.FC<RightSidebarProps> = ({ song, onClose, onOpenCoverRegen, onReuse, onReplayMusic, onSongUpdate, onNavigateToProfile, onNavigateToSong, isLiked, onToggleLike, onDelete, onAddToPlaylist, onPlay, isPlaying, currentSong }) => {
+export const RightSidebar: React.FC<RightSidebarProps> = ({ song, onClose, onOpenCoverRegen, onReuse, onSongUpdate, onNavigateToProfile, onNavigateToSong, isLiked, onToggleLike, onPlay, isPlaying, currentSong }) => {
     const { user } = useAuth();
     const { t, language } = useI18n();
     const adapterLibrary = useAdapterLibrary();

@@ -1402,9 +1402,6 @@ function AppContent() {
               setIsCreatePlaylistModalOpen(true);
             }}
             onSelectPlaylist={(p) => handleNavigateToPlaylist(p.id)}
-            onAddToPlaylist={openAddToPlaylistModal}
-            onReusePrompt={handleReuse}
-            onDeleteSong={handleDeleteSong}
             isNativeLibrary
             onImported={() => { void refreshNativeLibrary(); }}
           />
@@ -1497,9 +1494,6 @@ function AppContent() {
                 onAddToPlaylist={openAddToPlaylistModal}
                 onOpenCoverRegen={openCoverRegen}
                 onShowDetails={handleShowDetails}
-                onReusePrompt={handleReuse}
-                onReplayMusic={handleNativeReplay}
-                onDelete={handleDeleteSong}
                 onDeleteMany={handleDeleteSongs}
                 onSongUpdate={handleSongUpdate}
                 onCancelJob={cancelGeneration}
@@ -1523,11 +1517,9 @@ function AppContent() {
                   onClose={() => setShowRightSidebar(false)}
                   onOpenCoverRegen={() => selectedSong && openCoverRegen(selectedSong)}
                   onReuse={handleReuse}
-                  onReplayMusic={handleNativeReplay}
                   onSongUpdate={handleSongUpdate}
                   isLiked={selectedSong ? likedSongIds.has(selectedSong.id) : false}
                   onToggleLike={toggleLike}
-                  onDelete={handleDeleteSong}
                   onPlay={playSong}
                   isPlaying={isPlaying}
                   currentSong={currentSong}
@@ -1617,9 +1609,6 @@ function AppContent() {
         onToggleRepeat={() => setRepeatMode(prev => prev === 'none' ? 'all' : prev === 'all' ? 'one' : 'none')}
         isLiked={currentSong ? likedSongIds.has(currentSong.id) : false}
         onToggleLike={() => currentSong && toggleLike(currentSong.id)}
-        onReusePrompt={() => currentSong && handleReuse(currentSong)}
-        onAddToPlaylist={() => currentSong && openAddToPlaylistModal(currentSong)}
-        onDelete={() => currentSong && handleDeleteSong(currentSong)}
         onPlayFirst={playFirst}
       />}
 
@@ -1695,11 +1684,9 @@ function AppContent() {
               onClose={() => setShowMobileDetails(false)}
               onOpenCoverRegen={() => selectedSong && openCoverRegen(selectedSong)}
               onReuse={handleReuse}
-              onReplayMusic={handleNativeReplay}
               onSongUpdate={handleSongUpdate}
               isLiked={selectedSong ? likedSongIds.has(selectedSong.id) : false}
               onToggleLike={toggleLike}
-              onDelete={handleDeleteSong}
               onPlay={playSong}
               isPlaying={isPlaying}
               currentSong={currentSong}
