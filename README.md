@@ -76,6 +76,9 @@ Code, save [docs/mcp-skill.md](docs/mcp-skill.md) as `~/.claude/skills/minimax-m
   (34 instrument groups and drums) with MuScriptor on the GPU, through HOT-Step's native
   port. A piano roll fills in while it listens; play it against the original, mute or solo
   an instrument, save the .mid. Downloaded the first time it is used.
+- **Every result is a track** — stems, a processed take, a re-render and a cover land in
+  the library as tracks of their own, each linked to the one it was made from and keeping
+  the settings it was made with.
 - **Export files that carry their own data** — MP3s are written with ID3v2.4: title,
   artist, album, genre, tempo, the lyrics and the cover art.
 - **Choose your own quality/VRAM trade-off** in the model manager. Nothing downloads by
@@ -119,14 +122,22 @@ Code, save [docs/mcp-skill.md](docs/mcp-skill.md) as `~/.claude/skills/minimax-m
 
 | | |
 |---|---|
+| ![Any track to MIDI](docs/screenshots/en-10-midi.png) | ![Your own LoRA](docs/screenshots/en-09-training.png) |
+| Any track to MIDI — a piano roll of every instrument, played against the original | Your own LoRA trained on the card — the loss as it learns, a checkpoint every 100 steps |
+| ![A dataset](docs/screenshots/en-08-dataset.png) | ![LoRA catalogue](docs/screenshots/en-07-lora.png) |
+| A dataset — lyrics found, the caption written by ear, tempo and key measured | The LoRA catalogue — styles, artists and sound, downloaded in one pass |
+| ![Audio processing](docs/screenshots/en-11-processing.png) | ![Agent over MCP](docs/screenshots/en-12-agent.png) |
+| Audio processing — noise reduction, Spectral Lifter, VST3, mastering to a reference | An agent over MCP — the address and the lines for Claude Code and other clients |
+| ![Tracks made by tools](docs/screenshots/en-13-derived.png) | ![Writing a track](docs/screenshots/en-01-create.png) |
+| Tracks made by tools stay in the library, linked to their original | Writing a track — the caption as a document, every parameter a slider |
 | ![A finished track](docs/screenshots/en-02-player.png) | ![Studio tools](docs/screenshots/en-03-tools.png) |
 | A finished track — cover, timed lyrics, the request that made it | Studio tools — six-stem separation on the GPU, transcription, editor |
 | ![Models](docs/screenshots/en-04-models.png) | ![Providers](docs/screenshots/en-05-providers.png) |
 | Model sets — one quantisation per role, switchable once installed | Every capability runs where you say, local or OpenRouter |
-| ![Cover art](docs/screenshots/en-06-cover.png) | ![Writing a track](docs/screenshots/en-01-create.png) |
-| Cover art — large preview, prompt templates filled from the track | Writing a track — the caption as a document, every parameter a slider |
+| ![Cover art](docs/screenshots/en-06-cover.png) | |
+| Cover art — large preview, prompt templates filled from the track | |
 
-The same six screens are in the interface language you read: [Русский](https://timoncool.github.io/MiniMax-Music3-Studio/ru.html),
+The same screens are in the interface language you read: [Русский](https://timoncool.github.io/MiniMax-Music3-Studio/ru.html),
 [中文](https://timoncool.github.io/MiniMax-Music3-Studio/zh.html), [日本語](https://timoncool.github.io/MiniMax-Music3-Studio/ja.html),
 [한국어](https://timoncool.github.io/MiniMax-Music3-Studio/ko.html) — on the project page, or in
 [docs/screenshots](docs/screenshots).
