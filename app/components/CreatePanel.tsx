@@ -627,23 +627,30 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
   }));
   useBridgeCommand('create_set', (args) => {
     const fields = (args.fields && typeof args.fields === 'object' ? args.fields : args) as Record<string, unknown>;
-    const unknown: string[] = [];
+    // every field is checked before any changes, so a refused call leaves the form as it was
+    const extra = ['caption', 'mode', 'instrumental', 'randomize_seed', 'adapters'];
+    const choices: Record<string, string[]> = { mode: ['studio', 'simple'], output_format: ['mp3', 'wav16', 'wav24', 'wav32'] };
+    const unknown = Object.keys(fields).filter(key => !formFields[key] && !extra.includes(key));
+    if (unknown.length) throw new Error(`Unknown fields: ${unknown.join(', ')}. The form has: ${[...Object.keys(formFields), ...extra].join(', ')}.`);
+    for (const [key, allowed] of Object.entries(choices)) {
+      if (key in fields && !allowed.includes(String(fields[key] ?? ''))) throw new Error(`${key} is one of: ${allowed.join(', ')}.`);
+    }
+    if ('caption' in fields && typeof fields.caption !== 'string') throw new Error('caption is text.');
+    if ('adapters' in fields && !Array.isArray(fields.adapters)) throw new Error('adapters is a list of {id, scales}.');
     for (const [key, value] of Object.entries(fields)) {
-      if (key === 'mode' && (value === 'studio' || value === 'simple')) setMode(value);
-      else if (key === 'caption' && typeof value === 'string') {
+      if (key === 'mode') setMode(value as 'simple' | 'studio');
+      else if (key === 'caption') {
         // a whole caption goes into its three parts by their headings
-        const parts = splitCaption(value);
+        const parts = splitCaption(value as string);
         setGlobalMetadata(parts.globalMetadata);
         setVocalDetails(parts.vocalDetails);
         setArrangement(parts.arrangement);
       }
       else if (key === 'instrumental') setInstrumental(Boolean(value));
       else if (key === 'randomize_seed') setRandomizeSeed(Boolean(value));
-      else if (key === 'adapters' && Array.isArray(value)) setAdapters(value as AdapterUse[]);
-      else if (formFields[key]) formFields[key][1](value == null ? '' : String(value));
-      else unknown.push(key);
+      else if (key === 'adapters') setAdapters(value as AdapterUse[]);
+      else formFields[key][1](value == null ? '' : String(value));
     }
-    if (unknown.length) throw new Error(`Unknown fields: ${unknown.join(', ')}. The form has: ${[...Object.keys(formFields), 'caption', 'mode', 'instrumental', 'randomize_seed', 'adapters'].join(', ')}.`);
     return { text: 'Filled in; create_form_get shows the form, ui_screenshot shows it on screen.' };
   });
   useBridgeCommand('create_submit', () => {
