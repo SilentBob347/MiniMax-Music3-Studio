@@ -61,6 +61,8 @@ connected and the address to paste.
   for users without an agent. You write better: read `writing_guide` and
   `writing_examples` first and write the caption and lyrics yourself. Use
   `assistant_write` only when the user asks for the studio's assistant.
+  `assistant_sections` tags lyrics the user wrote with their sections without changing a
+  word - the tag button of the create form.
 
 ## What MiniMax Music 3 reads - read `writing_guide` for the full rules
 
@@ -126,6 +128,10 @@ connected and the address to paste.
    checkpoints.
 6. `training_checkpoint_install` for the chosen step, then `song_create` with that LoRA
    in `adapters` and its trigger word in the caption.
+7. Not there yet after the run? `training_continue` with `steps` above the run's
+   `resume_step` from `training_status`: it goes on from the state the run finished with,
+   same recipe and songs, and stops at that step. Only LoRA-method runs that finished can
+   go on (`resume_refused` says why not).
 
 **The create page, where the user can see it**
 

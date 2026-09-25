@@ -44,7 +44,8 @@ export function splitCaption(caption: string): { globalMetadata: string; vocalDe
 /** Rebuilds the single caption string the engine takes from the three panes. */
 export function joinCaption(globalMetadata: string, vocalDetails: string, arrangement: string): string {
   return SECTIONS.map((heading, index) => {
-    const body = [globalMetadata, vocalDetails, arrangement][index].trim();
+    // a trigger's comma with nothing after it is not part of the caption
+    const body = [globalMetadata, vocalDetails, arrangement][index].trim().replace(/,$/, '').trimEnd();
     return body ? `${heading}\n${body}` : '';
   })
     .filter(Boolean)

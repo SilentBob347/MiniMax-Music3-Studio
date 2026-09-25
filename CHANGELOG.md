@@ -3,6 +3,32 @@
 What changed, newest first. Dates are release dates; the studio is versioned by its
 Windows build.
 
+## Unreleased
+
+### Added
+
+- **Train further.** A finished run that is not there yet goes on from where it stopped:
+  set the steps to reach and press **Train further** on the run. The same recipe and songs,
+  the optimizer as it was; the loss chart and the checkpoints continue instead of starting
+  over. Runs trained with the LoRA method only - the trainer keeps no state for PiSSA and
+  HOT-PiZZA to go on from, and the run card says so. MCP: `training_continue`.
+- **Section tags for your own lyrics.** The tag button beside the lyrics lays them out in
+  [verse], [chorus], [bridge]... without changing a word: the assistant only says where each
+  section starts, and the lines go under the tags as written. MCP: `assistant_sections`.
+
+### Fixed
+
+- **Renaming a track.** The pencil in the song details and the title in the library did
+  nothing for most tracks: songs of the local library carried no owner, so the studio took
+  them for someone else's. Every track can be renamed from both places now, and the library
+  row shows a pencil on hover.
+- **Models kept in several folders.** **Use models I already have** looked only at the top
+  of the folder you pick; it now searches its subfolders too (hidden ones aside), off the
+  window's thread.
+- **Wider side panels.** The create panel and the song details stretch up to 1200 px on a
+  wide screen, never past 40% of the window; a double click on the edge puts the default
+  width back, and the arrow keys move the focused edge.
+
 ## 2026-09-25 — 2.0.0
 
 ### Added

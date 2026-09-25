@@ -602,6 +602,18 @@ pub fn sheet_sections_schema() -> Value {
     })
 }
 
+/// The lines of a lyric sheet without its section tags: a line that is only a
+/// bracketed tag goes, the words stay as they are.
+pub fn without_section_tags(text: &str) -> String {
+    text.lines()
+        .filter(|line| {
+            let line = line.trim();
+            !(line.starts_with('[') && line.ends_with(']') && !line[1..line.len() - 1].contains(['[', ']']))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// The sheet in sections from where the model says each one starts: a
 /// section runs to the line before the next one, so every line is kept once,
 /// in order, gaps and overlaps in the answer notwithstanding. None when the
@@ -658,6 +670,12 @@ pub fn cyrillic_share(text: &str) -> f64 {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn section_tags_go_and_the_words_stay() {
+        let sheet = "[Verse 1]\nСреди связок\n[x] в горле\n\n[Chorus]\nНо настала пора";
+        assert_eq!(without_section_tags(sheet), "Среди связок\n[x] в горле\n\nНо настала пора");
+    }
     /// The skill is 6 MB on disk and none of it may travel: only the routed
     /// reference captions do, and there are at most three.
     #[test]

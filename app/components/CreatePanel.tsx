@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { karaokeReason } from '../services/karaoke';
-import { AlertTriangle, ChevronDown, CircleAlert, Dices, FolderOpen, Loader2, RotateCcw, Save, Sparkles, Square, Trash2, Wand2, Settings2 } from 'lucide-react';
+import { AlertTriangle, ChevronDown, CircleAlert, Dices, FolderOpen, Loader2, RotateCcw, Save, Sparkles, Square, Tags, Trash2, Wand2, Settings2 } from 'lucide-react';
 import type { Music3Request, Song } from '../types';
 import { useI18n } from '../context/I18nContext';
 import { useBridgeCommand } from '../services/mcpBridge';
@@ -253,7 +253,8 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
     setGlobalMetadata(current => {
       const parts = current.split(',').map(part => part.trim());
       const has = parts.some(part => part.toLowerCase() === word.toLowerCase());
-      if (present) return has ? current : current.trim() ? `${word}, ${current.trim()}` : word;
+      // into an empty field the word comes with its comma, so what is typed next stays apart
+      if (present) return has ? current : current.trim() ? `${word}, ${current.trim()}` : `${word}, `;
       return has ? parts.filter(part => part.toLowerCase() !== word.toLowerCase()).join(', ') : current;
     });
   }, []);
@@ -265,7 +266,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
   const [serviceDown, setServiceDown] = useState(false);
   const [catalog, setCatalog] = useState<EngineCatalog | null>(null);
   const [assistantReady, setAssistantReady] = useState(false);
-  const [assisting, setAssisting] = useState<'all' | 'lyrics' | 'prompt' | null>(null);
+  const [assisting, setAssisting] = useState<'all' | 'lyrics' | 'prompt' | 'sections' | null>(null);
   // What the assistant is doing right now, and what it has written so far.
   const [assistStage, setAssistStage] = useState<string | null>(null);
   const [assistModel, setAssistModel] = useState<string | null>(null);
@@ -501,7 +502,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
         description: name.trim(),
         instruction: assistInstruction.trim(),
         lyrics: lyrics.trim(),
-        global_metadata: globalMetadata.trim(),
+        global_metadata: globalMetadata.trim().replace(/,$/, '').trimEnd(),
         vocal_details: vocalDetails.trim(),
         arrangement: arrangement.trim(),
         duration_seconds: numberOrUndefined(duration) ?? 60,
@@ -584,6 +585,33 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
       setAssisting(null);
       setAssistStage(null);
       setAssistDraft('');
+    }
+  };
+
+  // Tags the lyrics already in the form: the assistant marks where each
+  // section starts, the words stay exactly as written.
+  const layOutLyrics = async () => {
+    if (!assistantReady || assisting || !lyrics.trim()) return;
+    const run = new AbortController();
+    assistRun.current = run;
+    setAssisting('sections');
+    setError(null);
+    try {
+      const response = await fetch('/v1/assistant/sections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lyrics }),
+        signal: run.signal,
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok || typeof body?.lyrics !== 'string') throw new Error(body?.error || String(response.status));
+      setLyrics(body.lyrics);
+    } catch (reason) {
+      const cancelled = reason instanceof DOMException && reason.name === 'AbortError';
+      if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      assistRun.current = null;
+      setAssisting(null);
     }
   };
 
@@ -861,6 +889,11 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
                 >
                   {t('promptBudgetShort')} {promptTokens} / {MAX_PROMPT_TOKENS}
                 </span>
+                {assistantReady && (
+                  <button type="button" onClick={() => void layOutLyrics()} disabled={assisting !== null || !lyrics.trim()} className={ICON} title={t('formatLyrics')}>
+                    {assisting === 'sections' ? <Loader2 size={14} className="animate-spin" /> : <Tags size={14} />}
+                  </button>
+                )}
                 {assistantReady && (
                   <button type="button" onClick={() => void askAssistant('lyrics')} disabled={assisting !== null} className={ICON} title={t('writeLyrics')}>
                     {assisting === 'lyrics' ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} className="text-pink-500" />}

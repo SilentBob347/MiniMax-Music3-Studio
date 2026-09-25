@@ -342,6 +342,31 @@ pub fn training_stages(inputs: &TrainingInputs) -> Vec<TrainingStage> {
     vec![TrainingStage { id: "codes", args: codes_stage }, TrainingStage { id: "train", args: train }]
 }
 
+/// A run trained further, up to `inputs.recipe.steps`: the trainer resumes
+/// the optimizer, the song order and the step count from `resume` and keeps
+/// writing into the run's output. Its songs and codes are the run's already.
+pub fn continuation_stage(inputs: &TrainingInputs, resume: &Path) -> TrainingStage {
+    let mut train = training_stages(inputs).pop().expect("the training stage").args;
+    train.extend([OsString::from("--resume"), path(resume)]);
+    TrainingStage { id: "train", args: train }
+}
+
+/// The trainer's refusal, before it is asked: PiSSA and HOT-PiZZA fit frozen
+/// factors to the base at step 0, and the resume state does not carry them.
+pub fn continuation_refused(recipe: &Recipe) -> bool {
+    recipe.method != "lora"
+}
+
+/// The state a run can be continued from, and its step: the trainer writes it
+/// on a clean finish, `resume-state.bin` with `resume-state.json` beside it.
+pub fn resume_point(run: &Path) -> Option<(u32, PathBuf)> {
+    let output = run.join("output");
+    let state = output.join("resume-state.bin");
+    let meta: serde_json::Value = serde_json::from_slice(&std::fs::read(output.join("resume-state.json")).ok()?).ok()?;
+    let step = meta.get("step")?.as_u64()? as u32;
+    state.is_file().then_some((step, state))
+}
+
 /// A step of the training stage, as the trainer reports it.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct TrainingStep {
@@ -409,6 +434,28 @@ pub fn caption_with_trigger(caption: &str, trigger: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_run_goes_on_from_the_state_it_finished_with() {
+        let run = std::env::temp_dir().join(format!("mm-train-resume-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&run);
+        let output = run.join("output");
+        std::fs::create_dir_all(&output).unwrap();
+        assert!(resume_point(&run).is_none(), "no state, nothing to go on from");
+        std::fs::write(output.join("resume-state.bin"), b"state").unwrap();
+        std::fs::write(output.join("resume-state.json"), br#"{"reason": "final", "state": "x", "step": 600, "totalSteps": 600}"#).unwrap();
+        let (step, state) = resume_point(&run).unwrap();
+        assert_eq!(step, 600);
+        let inputs = TrainingInputs { data: run.join("data"), models: PathBuf::from("models"), run: run.clone(), recipe: Recipe { method: "lora".into(), steps: 850, ..Recipe::default() } };
+        let stage = continuation_stage(&inputs, &state);
+        let args: Vec<String> = stage.args.iter().map(|arg| arg.to_string_lossy().into_owned()).collect();
+        assert_eq!(stage.id, "train");
+        assert_eq!(args[args.iter().position(|arg| arg == "--resume").unwrap() + 1], state.to_string_lossy());
+        assert_eq!(args[args.iter().position(|arg| arg == "--steps").unwrap() + 1], "850");
+        assert!(!args.iter().any(|arg| arg.starts_with("--pissa") || arg == "--hot-pizza"));
+        assert!(continuation_refused(&Recipe::default()), "HOT-PiZZA, the default, cannot be continued");
+        let _ = std::fs::remove_dir_all(&run);
+    }
 
     #[test]
     fn epochs_become_steps() {

@@ -59,7 +59,8 @@ Code, save [docs/mcp-skill.md](docs/mcp-skill.md) as `~/.claude/skills/minimax-m
 - **Karaoke video** written with the bundled ffmpeg, hardware-encoded when the machine can
   and software-encoded when it cannot.
 - **A writing assistant** for captions and lyrics, from a local GGUF model or OpenRouter,
-  following MiniMax's own published prompting skill.
+  following MiniMax's own published prompting skill. Lyrics you wrote yourself get their
+  section tags with one button, the words exactly as you wrote them.
 - **Cover art from templates** — write the look once with `{title}`, `{style}` and
   `{excerpt}`, and the track fills the rest in.
 - **Manage your library** — search, playlists, favourites, rename, import your own audio,
@@ -110,6 +111,10 @@ Code, save [docs/mcp-skill.md](docs/mcp-skill.md) as `~/.claude/skills/minimax-m
     the songs.
   - **A trigger word from the start** — every dataset gets a rare word made from its name,
     which you can change.
+  - **Train further** — a finished LoRA-method run goes on from where it stopped: set a
+    higher step count and the loss chart and the checkpoints continue instead of starting
+    over. (PiSSA and HOT-PiZZA runs cannot: the trainer does not keep the frozen factors
+    they are measured against.)
 - **Audio processing** — noise reduction, the Spectral Lifter, a vocal naturaliser, your
   own VST3 plugins in a chain, and mastering to a reference track. Compare before and
   after while it plays, then keep the result as a version of the track or throw it away.
@@ -163,7 +168,7 @@ While the studio is open it serves MCP at `http://127.0.0.1:8765/mcp`: an agent 
 Claude Code, Claude Desktop or Cursor does everything the page does, through the same code -
 songs, the library, covers, stems, MIDI, karaoke, processing, video clips, the player, LoRA, and a
 LoRA from a folder of songs end to end - and sees and works the window itself: a
-screenshot, its controls, clicks and typing. 159 tools, grouped by area. MiniMax's own
+screenshot, its controls, clicks and typing. 161 tools, grouped by area. MiniMax's own
 caption rules and reference captions come with the server, so the agent writes the
 captions, lyrics and lyric layouts itself instead of the studio's small assistant.
 
