@@ -10,6 +10,7 @@ import { CoverRegenModal } from './components/CoverRegenModal';
 import { ReplayModal } from './components/ReplayModal';
 import { ProcessingModal } from './components/ProcessingModal';
 import { VideoGeneratorModal } from './components/VideoGeneratorModal';
+import { SongActions, SongActionsProvider } from './context/SongActionsContext';
 import { useBridgeCommand } from './services/mcpBridge';
 import { apiUrl } from './services/apiBase';
 import { SettingsModal } from './components/SettingsModal';
@@ -1498,7 +1499,6 @@ function AppContent() {
                 onShowDetails={handleShowDetails}
                 onReusePrompt={handleReuse}
                 onReplayMusic={handleNativeReplay}
-                onExportVideo={setSongForVideo}
                 onDelete={handleDeleteSong}
                 onDeleteMany={handleDeleteSongs}
                 onSongUpdate={handleSongUpdate}
@@ -1524,7 +1524,6 @@ function AppContent() {
                   onOpenCoverRegen={() => selectedSong && openCoverRegen(selectedSong)}
                   onReuse={handleReuse}
                   onReplayMusic={handleNativeReplay}
-                onExportVideo={setSongForVideo}
                   onSongUpdate={handleSongUpdate}
                   isLiked={selectedSong ? likedSongIds.has(selectedSong.id) : false}
                   onToggleLike={toggleLike}
@@ -1552,7 +1551,18 @@ function AppContent() {
     }
   };
 
+  // Every song menu and song button takes its actions from here.
+  const songActions: SongActions = {
+    reusePrompt: handleReuse,
+    replay: handleNativeReplay,
+    exportVideo: setSongForVideo,
+    addToPlaylist: openAddToPlaylistModal,
+    remove: handleDeleteSong,
+    update: handleSongUpdate,
+  };
+
   return (
+    <SongActionsProvider value={songActions}>
     <div className="flex h-[100dvh] min-h-0 min-w-0 flex-col overflow-hidden bg-white dark:bg-suno text-zinc-900 dark:text-white font-sans antialiased selection:bg-pink-500/30 transition-colors duration-300">
       <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
         <Sidebar
@@ -1686,7 +1696,6 @@ function AppContent() {
               onOpenCoverRegen={() => selectedSong && openCoverRegen(selectedSong)}
               onReuse={handleReuse}
               onReplayMusic={handleNativeReplay}
-              onExportVideo={setSongForVideo}
               onSongUpdate={handleSongUpdate}
               isLiked={selectedSong ? likedSongIds.has(selectedSong.id) : false}
               onToggleLike={toggleLike}
@@ -1707,6 +1716,7 @@ function AppContent() {
         onCancel={() => setConfirmDialog(null)}
       />
     </div>
+    </SongActionsProvider>
   );
 }
 
