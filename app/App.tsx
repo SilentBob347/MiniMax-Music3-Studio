@@ -1,4 +1,4 @@
-import React, { Activity, useState, useEffect, useRef, useCallback } from 'react';
+import React, { Activity, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { CreatePanel } from './components/CreatePanel';
 import { SongList } from './components/SongList';
@@ -1402,7 +1402,6 @@ function AppContent() {
               setIsCreatePlaylistModalOpen(true);
             }}
             onSelectPlaylist={(p) => handleNavigateToPlaylist(p.id)}
-            isNativeLibrary
             onImported={() => { void refreshNativeLibrary(); }}
           />
         );
@@ -1543,8 +1542,10 @@ function AppContent() {
     }
   };
 
-  // Every song menu and song button takes its actions from here.
-  const songActions: SongActions = {
+  // Every song menu and song button takes its actions from here. The value
+  // keeps one identity, so the playing clock does not re-render every row.
+  const songActionsLatest = useRef<Required<SongActions>>(null as never);
+  songActionsLatest.current = {
     reusePrompt: handleReuse,
     replay: handleNativeReplay,
     exportVideo: setSongForVideo,
@@ -1552,6 +1553,14 @@ function AppContent() {
     remove: handleDeleteSong,
     update: handleSongUpdate,
   };
+  const songActions = useMemo<SongActions>(() => ({
+    reusePrompt: song => songActionsLatest.current.reusePrompt(song),
+    replay: song => songActionsLatest.current.replay(song),
+    exportVideo: song => songActionsLatest.current.exportVideo(song),
+    addToPlaylist: song => songActionsLatest.current.addToPlaylist(song),
+    remove: song => songActionsLatest.current.remove(song),
+    update: song => songActionsLatest.current.update(song),
+  }), []);
 
   return (
     <SongActionsProvider value={songActions}>
