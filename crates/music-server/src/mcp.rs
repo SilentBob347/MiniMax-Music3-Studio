@@ -162,8 +162,31 @@ fn compact_song(song: &Value) -> Value {
         let codes = fields.remove("audio_codes").is_some_and(|codes| !codes.is_null());
         fields.remove("replay_request");
         fields.insert("has_audio_codes".into(), codes.into());
+        // the score and the karaoke timings are long; they say they are there
+        if let Some(settings) = fields.get_mut("generation_settings").and_then(Value::as_object_mut) {
+            let score = settings.remove("abc").is_some_and(|abc| abc.as_str().is_some_and(|abc| !abc.trim().is_empty()));
+            settings.remove("lyrics");
+            settings.insert("has_score".into(), score.into());
+        }
+        if let Some(metadata) = fields.get_mut("metadata").and_then(Value::as_object_mut) {
+            let karaoke = metadata.remove("lrc").is_some_and(|lrc| lrc.as_str().is_some_and(|lrc| !lrc.is_empty()));
+            metadata.insert("has_karaoke".into(), karaoke.into());
+        }
     }
     song
+}
+
+/// The recogniser settings and the models to choose from, without the files
+/// each model is made of.
+fn compact_karaoke(status: &Value) -> Value {
+    let models: Vec<Value> = status["assets"].as_array().into_iter().flatten()
+        .filter(|asset| asset["kind"] == "model" && !asset["vram_gb"].is_null())
+        .map(|asset| json!({ "id": asset["id"], "label": asset["label"], "installed": asset["installed"], "vram_gb": asset["vram_gb"], "about": asset["note"] }))
+        .collect();
+    json!({
+        "enabled": status["enabled"], "provider": status["provider"], "whisper_model": status["whisper_model"], "openrouter_model": status["openrouter_model"],
+        "runtime": status["runtime"], "ready": status["ready"], "download": status["active_download"], "models": models,
+    })
 }
 
 /// A name or a description the catalogue gives in several languages, in English.
@@ -195,6 +218,7 @@ fn shape(name: &str, args: &Value, value: Value) -> Value {
         "song_jobs_list" if !detailed => Value::Array(value.as_array().into_iter().flatten().map(compact_job).collect()),
         "library_song_get" if !detailed => compact_song(&value),
         "lora_list" if !detailed => compact_loras(&value),
+        "karaoke_settings_get" if !detailed => compact_karaoke(&value),
         "training_checkpoint_install" | "lora_install_hf" | "lora_import_files" if value["slots"].as_array().is_some_and(Vec::is_empty) => {
             let mut value = value;
             value["slots"] = json!("not known yet: the engine reads them from the file; lora_list shows them");
@@ -248,9 +272,14 @@ async fn status_summary() -> Value {
     })
 }
 
+/// How long one wait holds a call: clients give up on a tool call after about
+/// a minute, so a wait answers before that and the agent calls it again.
+const WAIT_DEFAULT: u64 = 30;
+const WAIT_LONGEST: u64 = 55;
+
 /// Waits for a job, the preparation, training or everything, a slice at a time.
 async fn wait_for(args: &Value) -> Value {
-    let seconds = args.get("seconds").and_then(Value::as_u64).unwrap_or(60).clamp(2, 240);
+    let seconds = args.get("seconds").and_then(Value::as_u64).unwrap_or(WAIT_DEFAULT).clamp(2, WAIT_LONGEST);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
     let job = args.get("job_id").and_then(Value::as_str).map(str::to_string);
     let until = args.get("until").and_then(Value::as_str).unwrap_or("idle").to_string();
@@ -472,7 +501,7 @@ pub async fn ask_agent(system: &str, user: &str, schema: Option<Value>, target: 
 
 /// Waits until the studio has a question for the agent, a slice at a time.
 async fn wait_for_questions(args: &Value) -> Value {
-    let seconds = args.get("seconds").and_then(Value::as_u64).unwrap_or(60).clamp(1, 240);
+    let seconds = args.get("seconds").and_then(Value::as_u64).unwrap_or(WAIT_DEFAULT).clamp(1, WAIT_LONGEST);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
     loop {
         let waiting = open_questions();
@@ -593,7 +622,7 @@ fn tools() -> &'static [Tool] {
             },
             Tool {
                 name: "studio_wait",
-                description: "Wait for work to finish instead of polling: a song job (job_id), the dataset preparation (until: preparation), the training run (until: training), or everything (until: idle). Returns when it is done or after seconds (60 by default, at most 240) with how far it got; call it again to keep waiting.",
+                description: "Wait for work to finish instead of polling: a song job (job_id), the dataset preparation (until: preparation), the training run (until: training), or everything (until: idle). Returns when it is done or after seconds (30 by default, at most 55, under the minute clients allow a call) with how far it got; call it again to keep waiting.",
                 schema: || object(json!({ "job_id": { "type": "string" }, "until": { "type": "string", "enum": ["preparation", "training", "idle"] }, "seconds": { "type": "integer" } }), &[]),
                 call: |_| composite("wait"),
             },
@@ -727,7 +756,7 @@ fn tools() -> &'static [Tool] {
             // ---------------------------------------------------------------- the agent as the studio's assistant
             Tool {
                 name: "assistant_requests_wait",
-                description: "When the user has chosen you as the studio's writing assistant (assistant engine 'Agent (MCP)'), what the studio would ask its own assistant waits here: the create page's write buttons, and the lyric layout and the styles of a dataset preparation. Returns the waiting requests - id, target, the instructions the studio's assistant would get, the request, and the JSON schema the answer must match - as soon as there is one, or after seconds (60 by default, at most 240). Answer each with assistant_request_answer; keep calling while the user works.",
+                description: "When the user has chosen you as the studio's writing assistant (assistant engine 'Agent (MCP)'), what the studio would ask its own assistant waits here: the create page's write buttons, and the lyric layout and the styles of a dataset preparation. Returns the waiting requests - id, target, the instructions the studio's assistant would get, the request, and the JSON schema the answer must match - as soon as there is one, or after seconds (30 by default, at most 55). Answer each with assistant_request_answer; keep calling while the user works.",
                 schema: || object(json!({ "seconds": { "type": "integer" } }), &[]),
                 call: |_| composite("questions"),
             },
@@ -814,7 +843,7 @@ fn tools() -> &'static [Tool] {
             // ---------------------------------------------------------------- the video editor
             Tool {
                 name: "video_open",
-                description: "Open the video editor for a library song: an audio-reactive clip with a visualiser, background, cover, text layers and karaoke lyrics, rendered to MP4.",
+                description: "Open the video editor for a library song: an audio-reactive clip with a visualiser, background, cover, text layers and karaoke lyrics, rendered to MP4. The studio's window must be visible (not minimised, not a hidden tab): a hidden window holds the preview and the render.",
                 schema: || id_only("song_id", "library song id"),
                 call: |args| window("video_open", args, 15),
             },
@@ -1251,7 +1280,7 @@ fn tools() -> &'static [Tool] {
             Tool {
                 name: "karaoke_settings_get",
                 description: "Lyrics timing and recognition: which recogniser (parakeet, whisper, openrouter), its model, on card or processor, what is downloaded.",
-                schema: nothing,
+                schema: || object(json!({ "response_format": { "type": "string", "enum": ["concise", "detailed"], "description": "detailed gives every file of every model" } }), &[]),
                 call: |_| get("/v1/karaoke/status".into()),
             },
             Tool {
@@ -1747,8 +1776,8 @@ const MODERN: &[&str] = &["2026-07-28"];
 const LEGACY: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26"];
 const META_VERSION: &str = "io.modelcontextprotocol/protocolVersion";
 /// How long a client may keep the tool list, the prompts and the guides:
-/// they change only with the studio itself.
-const LIST_TTL_MS: u64 = 3_600_000;
+/// they change only with the studio, but an update should show within minutes.
+const LIST_TTL_MS: u64 = 300_000;
 const HEADER_MISMATCH: i64 = -32020;
 const UNSUPPORTED_VERSION: i64 = -32022;
 
@@ -1782,7 +1811,7 @@ fn rpc_failure(status: StatusCode, id: Value, code: i64, message: String, data: 
     (status, Json(json!({ "jsonrpc": "2.0", "id": id, "error": error }))).into_response()
 }
 
-/// A list or a read a client may cache: the same for everyone, fresh for an hour.
+/// A list or a read a client may cache: the same for everyone, fresh for five minutes.
 fn cacheable(mut result: Value) -> Value {
     result["ttlMs"] = LIST_TTL_MS.into();
     result["cacheScope"] = "public".into();
