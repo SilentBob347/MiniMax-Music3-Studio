@@ -72,6 +72,10 @@ Code, save [docs/mcp-skill.md](docs/mcp-skill.md) as `~/.claude/skills/minimax-m
 - **Split a finished track into six stems** — drums, bass, other, vocals, guitar and
   piano — with HT-Demucs on the GPU, or on the CPU when you prefer. The model is an
   optional download like everything else.
+- **Any track to MIDI** — a song, a stem or a processed take becomes multi-instrument MIDI
+  (34 instrument groups and drums) with MuScriptor on the GPU, through HOT-Step's native
+  port. A piano roll fills in while it listens; play it against the original, mute or solo
+  an instrument, save the .mid. Downloaded the first time it is used.
 - **Export files that carry their own data** — MP3s are written with ID3v2.4: title,
   artist, album, genre, tempo, the lyrics and the cover art.
 - **Choose your own quality/VRAM trade-off** in the model manager. Nothing downloads by
@@ -146,9 +150,9 @@ hand.
 
 While the studio is open it serves MCP at `http://127.0.0.1:8765/mcp`: an agent such as
 Claude Code, Claude Desktop or Cursor does everything the page does, through the same code -
-songs, the library, covers, stems, karaoke, processing, video clips, the player, LoRA, and a
+songs, the library, covers, stems, MIDI, karaoke, processing, video clips, the player, LoRA, and a
 LoRA from a folder of songs end to end - and sees and works the window itself: a
-screenshot, its controls, clicks and typing. 150 tools, grouped by area. MiniMax's own
+screenshot, its controls, clicks and typing. 159 tools, grouped by area. MiniMax's own
 caption rules and reference captions come with the server, so the agent writes the
 captions, lyrics and lyric layouts itself instead of the studio's small assistant.
 
@@ -290,6 +294,18 @@ the exact name in the listed folder is recognised and not downloaded again.
 | File | What for | Size | Put in the data folder |
 | --- | --- | --- | --- |
 | [`htdemucs_6s_fp16weights.onnx`](https://huggingface.co/StemSplitio/htdemucs-6s-onnx/resolve/49df9b6989cf2150840ea65b0bef77a2e471b678/htdemucs_6s_fp16weights.onnx) | HT-Demucs, six stems | 130 MB | `separation\models\htdemucs\htdemucs_6s_fp16.onnx` (this name) |
+
+**MIDI from audio** — the transcriber and one of the models
+
+| File | What for | Size | Put in `data\` |
+| --- | --- | --- | --- |
+| [`music-midi-cuda-windows-x64.zip`](https://github.com/timoncool/YuE2-Studio/releases/download/music-midi-8a5e42c4/music-midi-cuda-windows-x64.zip) | HOT-Step's `ace-midi`, unpacked | 126 MB | `midi\runtime\music-midi\` |
+| [muscriptor-small](https://huggingface.co/cocktailpeanut/muscriptor-small/tree/31a8f75d6a8b5383fd71ad1371dc1620389ab722): `config.json`, `model.safetensors` | fast, 103M | 0.4 GB | `midi\models\muscriptor-small\` |
+| [muscriptor-medium](https://huggingface.co/cocktailpeanut/muscriptor-medium/tree/27246ba68bd4d8f98bdec10a6edf8d7cf42a8826): `config.json`, `model.safetensors` | balanced, 307M | 1.2 GB | `midi\models\muscriptor-medium\` |
+| [muscriptor-large](https://huggingface.co/cocktailpeanut/muscriptor-large/tree/87f4bf981f56f90fb5043153b3f54af3c3053da9): `config.json`, `model.safetensors` | best, 1.4B | 5.5 GB | `midi\models\muscriptor-large\` |
+
+MuScriptor by Kyutai & Mirelo, weights CC BY-NC 4.0 (non-commercial); the mirror carries the
+official files byte for byte, without the Hugging Face sign-in.
 
 **The writing assistant** — one of
 

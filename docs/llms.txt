@@ -1,6 +1,6 @@
 # MiniMax Music3 Studio
 
-> A Windows desktop studio for MiniMax Music 3, which sings a song from a structured caption and lyrics, running on the user's own NVIDIA card. While it is open it serves an MCP server at http://127.0.0.1:8765/mcp that an agent uses to do everything the studio does: songs from a structured caption and lyrics, the library, covers, stems, karaoke, audio processing, video clips, the player, LoRA, and a LoRA trained from a folder of songs end to end. The agent also sees the studio's window and works it like a user.
+> A Windows desktop studio for MiniMax Music 3, which sings a song from a structured caption and lyrics, running on the user's own NVIDIA card. While it is open it serves an MCP server at http://127.0.0.1:8765/mcp that an agent uses to do everything the studio does: songs from a structured caption and lyrics, the library, covers, stems, MIDI from any track, karaoke, audio processing, video clips, the player, LoRA, and a LoRA trained from a folder of songs end to end. The agent also sees the studio's window and works it like a user.
 
 For an agent given this repository: install the studio from the latest release, start it, connect to its MCP server, and read the skill the server serves (resource `studio://skill`, prompt `studio`) - it names every tool, what the model reads, and the recipes. Start every session with the tool `studio_status`.
 
