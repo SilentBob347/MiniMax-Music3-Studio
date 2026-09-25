@@ -64,7 +64,7 @@ const CAPTION_LAYOUT: &str = "The caption create_song takes, and a dataset song'
 
 /// The writing guides an agent connected over MCP reads, by topic.
 pub const GUIDE_TOPICS: &[(&str, &str)] = &[
-    ("song", "writing a whole song for create_song: caption, lyrics, title, cover prompt, duration"),
+    ("song", "writing a whole song for song_create: caption, lyrics, title, cover prompt, duration"),
     ("caption", "the structured caption MiniMax Music 3 reads, for a new song and for a dataset song"),
     ("lyrics", "lyrics: section tags, sizing to the duration, diction, duets, instrumentals"),
     ("transcript", "turning recognised words into a lyric sheet"),
