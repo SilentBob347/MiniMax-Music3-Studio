@@ -1,5 +1,28 @@
 [
   {
+    "id": "mm3-studio-2-1-0",
+    "date": "2026-09-25",
+    "title": {
+      "en": "MiniMax Music3 Studio 2.1.0",
+      "ru": "MiniMax Music3 Studio 2.1.0",
+      "zh": "MiniMax Music3 Studio 2.1.0",
+      "ja": "MiniMax Music3 Studio 2.1.0",
+      "ko": "MiniMax Music3 Studio 2.1.0"
+    },
+    "body": {
+      "en": "Train a LoRA further: a finished LoRA-method run goes on from where it stopped - set the steps to reach and press Train further; the loss chart and the checkpoints continue instead of starting over (PiSSA and HOT-PiZZA runs cannot, the trainer keeps no state for them). Section tags for your own lyrics with one button, the words exactly as you wrote them. Renaming a track works from the song details and the library, Use models I already have finds models in subfolders, and the side panels widen up to 1200 px on large screens.",
+      "ru": "Дообучение LoRA: законченный прогон методом LoRA продолжается с того места, где остановился - задайте, до какого шага учить, и нажмите «Дообучить»; график и чекпоинты идут дальше, а не заново (прогоны PiSSA и HOT-PiZZA тренер продолжать не умеет). Теги секций для вашего текста одной кнопкой - слова остаются ровно как написаны. Трек переименовывается из деталей песни и из библиотеки, «Взять уже скачанные модели» находит модели во вложенных папках, боковые панели растягиваются до 1200 px на больших экранах.",
+      "zh": "继续训练 LoRA：用 LoRA 方法完成的训练可以从停下的地方接着训练——设定要达到的步数并点击“继续训练”；损失曲线和检查点接续下去，而不是从头开始（PiSSA 和 HOT-PiZZA 训练无法继续，训练器不为它们保存状态）。一键为你自己的歌词加上段落标签，歌词一字不改。可以在歌曲详情和曲库中重命名音轨，“使用已下载的模型”能找到子文件夹中的模型，侧边栏在大屏上可加宽到 1200 像素。",
+      "ja": "LoRA の追加学習：LoRA 方式で終わった学習を止まったところから続けられます。目標ステップを設定して「追加で学習」を押すと、損失グラフとチェックポイントが最初からではなく続きから進みます（PiSSA と HOT-PiZZA はトレーナーが状態を保存しないため続けられません）。自分で書いた歌詞にワンクリックでセクションタグを付けられ、言葉はそのまま残ります。曲の詳細とライブラリからトラック名を変更でき、「ダウンロード済みのモデルを使う」がサブフォルダーのモデルも見つけ、サイドパネルは大きな画面で 1200 px まで広げられます。",
+      "ko": "LoRA 이어서 학습: LoRA 방식으로 끝난 학습을 멈춘 곳부터 이어 갈 수 있습니다. 목표 스텝을 정하고 「이어서 학습」을 누르면 손실 그래프와 체크포인트가 처음부터가 아니라 이어서 진행됩니다(PiSSA와 HOT-PiZZA는 트레이너가 상태를 저장하지 않아 이어 갈 수 없습니다). 직접 쓴 가사에 버튼 하나로 섹션 태그를 달 수 있고, 가사는 쓴 그대로 남습니다. 곡 상세와 라이브러리에서 트랙 이름을 바꿀 수 있고, 「이미 받은 모델 사용」이 하위 폴더의 모델도 찾으며, 사이드 패널은 큰 화면에서 1200px까지 넓어집니다."
+    },
+    "tags": [
+      "MiniMax",
+      "2.1.0",
+      "LoRA"
+    ]
+  },
+  {
     "id": "mm3-studio-2-0-0",
     "date": "2026-09-25",
     "title": "🚀 2.0.0: студией управляет агент, любой трек - в MIDI",
