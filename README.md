@@ -168,7 +168,7 @@ While the studio is open it serves MCP at `http://127.0.0.1:8765/mcp`: an agent 
 Claude Code, Claude Desktop or Cursor does everything the page does, through the same code -
 songs, the library, covers, stems, MIDI, karaoke, processing, video clips, the player, LoRA, and a
 LoRA from a folder of songs end to end - and sees and works the window itself: a
-screenshot, its controls, clicks and typing. 161 tools, grouped by area. MiniMax's own
+screenshot, its controls, clicks and typing. 162 tools, grouped by area. MiniMax's own
 caption rules and reference captions come with the server, so the agent writes the
 captions, lyrics and lyric layouts itself instead of the studio's small assistant.
 

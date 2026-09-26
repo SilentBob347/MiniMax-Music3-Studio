@@ -744,6 +744,12 @@ fn tools() -> &'static [Tool] {
                 call: |_| post("/engine/restart".into(), json!({})),
             },
             Tool {
+                name: "resources_rescan",
+                description: "Find every model and LoRA on disk again, for files put in the folders by hand. The engine restarts once the songs in flight are done; a model the studio downloads is found without this.",
+                schema: nothing,
+                call: |_| post("/v1/resources/rescan".into(), json!({})),
+            },
+            Tool {
                 name: "engine_presets_get",
                 description: "The engine's ready-made presets (speed against quality and video memory) and which one is in use.",
                 schema: nothing,

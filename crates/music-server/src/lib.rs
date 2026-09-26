@@ -45,7 +45,7 @@ use axum::{
     Json, Router,
 };
 use music_core::{Capability, EngineDescriptor, ExecutionMode, StudioConfiguration};
-use model_manager::{InstallRequest, ModelManager};
+use model_manager::{DownloadStatus, InstallRequest, ModelManager};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::RwLock;
@@ -66,6 +66,9 @@ struct AppState {
     library: library::Library,
     /// Owned local engine process, when this service started one.
     engine: Arc<tokio::sync::Mutex<Option<music_engine::mm_server::MmServerSupervisor>>>,
+    /// Held for reading while work is sent to the engine and for writing by a
+    /// rescan, which restarts the engine: never under a song.
+    engine_use: Arc<tokio::sync::RwLock<()>>,
     engine_options: Arc<RwLock<EngineOptions>>,
     /// Devices that failed under Auto in this session - the engine did not
     /// start on them, or died with a CUDA or Vulkan error - and the one the
@@ -597,6 +600,7 @@ pub async fn serve() -> anyhow::Result<()> {
         openrouter_catalog: Arc::new(RwLock::new(OpenRouterCatalogState::default())),
         library: library::Library::open_default()?,
         engine: Arc::new(tokio::sync::Mutex::new(None)),
+        engine_use: Arc::new(tokio::sync::RwLock::new(())),
         engine_options: Arc::new(RwLock::new(persisted.as_ref().map(|settings| settings.engine_options).unwrap_or_default())),
         failed_devices: Arc::new(RwLock::new(Vec::new())),
         active_device: Arc::new(RwLock::new(None)),
@@ -624,6 +628,7 @@ pub async fn serve() -> anyhow::Result<()> {
         .route("/engine/preset", post(apply_engine_preset))
         .route("/engine/options", get(engine_options).put(update_engine_options))
         .route("/engine/restart", post(restart_local_engine))
+        .route("/v1/resources/rescan", post(rescan_resources_route))
         .route("/v1/engine/logs", get(engine_logs))
         .route("/v1/system/resources", get(system_resources))
         .route("/v1/proxy/image", get(proxy_image))
@@ -781,14 +786,31 @@ pub async fn serve() -> anyhow::Result<()> {
             // a startup that is failing, and repeating "stopped answering" every
             // two seconds is what filled a whole log with one sentence.
             let mut was_running = false;
+            // The last finished model download seen; the one a previous session
+            // left behind is not news.
+            let mut last_download: Option<Option<String>> = None;
             loop {
-                let ready = state.model_manager.status(effective_install_target(&state).await).await.ready;
+                let status = state.model_manager.status(effective_install_target(&state).await).await;
+                let ready = status.ready;
                 let running = state.music_server.health().await;
+                let finished = status.active.as_ref().filter(|job| matches!(job.status, DownloadStatus::Completed)).map(|job| job.id.clone());
+                if last_download.as_ref().is_some_and(|seen| *seen != finished) && finished.is_some() && running {
+                    // a model that came down after the engine started is found by a rescan
+                    let state = state.clone();
+                    tokio::spawn(async move {
+                        if let Err(error) = rescan_resources(&state).await {
+                            eprintln!("[ERROR] finding the downloaded model: {error}");
+                        }
+                    });
+                }
+                last_download = Some(finished);
                 // the card has one owner: a preparation or a training run
                 // holding it is left alone, and the engine comes back after
                 let preparing = state.prepare.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_ref().is_some_and(|job| !job.finished);
                 let card_taken = preparing || state.training.active_run().await.is_some();
-                if ready && !running && !card_taken {
+                // a rescan restarting the engine is left alone
+                let quiet = state.engine_use.try_write().ok();
+                if ready && !running && !card_taken && quiet.is_some() && !state.music_server.health().await {
                     if was_running {
                         // It was answering and now it is not: the one line that
                         // explains a log which suddenly starts again from
@@ -819,6 +841,7 @@ pub async fn serve() -> anyhow::Result<()> {
                         }
                     }
                 }
+                drop(quiet);
                 was_running = running;
                 tokio::time::sleep(std::time::Duration::from_secs(if running { 5 } else { 2 })).await;
             }
@@ -3207,6 +3230,7 @@ async fn update_engine_options(
 
     let mut restarted = false;
     if changed && state.music_server.health().await {
+        let _restart = state.engine_use.write().await;
         restart_engine(&state).await.map_err(|error| api_error(StatusCode::SERVICE_UNAVAILABLE, error))?;
         restarted = true;
     }
@@ -3217,7 +3241,49 @@ async fn update_engine_options(
     })))
 }
 
+/// Makes the engine find every model and LoRA on disk again. It reads its
+/// folders once, when it starts, so a file that arrived later - a download, a
+/// file put there by hand - is found by restarting it. New songs wait for it,
+/// and the songs already on the engine are finished first: the engine keeps no
+/// list of its work, so each one the studio sent it is asked after.
+async fn rescan_resources(state: &AppState) -> Result<Value, String> {
+    let _rescan = state.engine_use.write().await;
+    if !state.music_server.health().await {
+        return Ok(serde_json::json!({ "restarted": false, "message": "The engine is not running; it finds every model and LoRA when it starts." }));
+    }
+    loop {
+        let sent: Vec<String> = state
+            .jobs
+            .read()
+            .await
+            .values()
+            .filter(|job| matches!(job.dispatch, MusicJobDispatch::Local) && matches!(job.status, MusicJobStatus::Queued | MusicJobStatus::Running))
+            .map(|job| job.id.clone())
+            .collect();
+        let mut rendering = false;
+        for id in &sent {
+            if state.music_server.job(id).await.is_ok_and(|remote| remote.status == "running") {
+                rendering = true;
+                break;
+            }
+        }
+        if !rendering {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    restart_engine(state).await?;
+    mcp::announce("resources_rescanned");
+    let props = state.music_server.props().await.map_err(|error| format!("the engine did not answer after the rescan: {error}"))?;
+    Ok(serde_json::json!({ "restarted": true, "models": props["models"], "adapters": props["adapters"] }))
+}
+
+async fn rescan_resources_route(State(state): State<AppState>) -> Result<Json<Value>, (StatusCode, Json<ApiError>)> {
+    rescan_resources(&state).await.map(Json).map_err(|error| api_error(StatusCode::SERVICE_UNAVAILABLE, error))
+}
+
 async fn restart_local_engine(State(state): State<AppState>) -> Result<Json<Value>, (StatusCode, Json<ApiError>)> {
+    let _restart = state.engine_use.write().await;
     restart_engine(&state).await.map_err(|error| api_error(StatusCode::SERVICE_UNAVAILABLE, error))?;
     Ok(Json(serde_json::json!({ "engine_id": PRIMARY_MUSIC_ENGINE_ID, "restarted": true })))
 }
@@ -5777,6 +5843,7 @@ async fn create_music_job(
         Ok(value) => value,
         Err(error) => return (StatusCode::BAD_REQUEST, Json(failed_request_job(request, engine_id, error))),
     };
+    let _using = state.engine_use.read().await;
     match state.music_server.submit(engine_submission(&mm_request)).await {
         Ok(remote) => {
             let job = MusicJob {
@@ -5853,6 +5920,7 @@ async fn replay_music_job(
     let synth_request = prepare_replay_synthesis(replay, &request).map_err(|error| api_error(StatusCode::BAD_REQUEST, error))?;
     let caption = synth_request.get("caption").and_then(Value::as_str).unwrap_or_default().to_owned();
     let lyrics = synth_request.get("lyrics").and_then(Value::as_str).unwrap_or_default().to_owned();
+    let _using = state.engine_use.read().await;
     let remote = state
         .music_server
         .submit(engine_submission(&synth_request))
