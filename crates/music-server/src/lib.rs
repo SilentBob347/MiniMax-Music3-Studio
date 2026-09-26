@@ -163,14 +163,18 @@ struct AdapterUse {
 
 /// The name this request goes into the library under: the user's, or one taken
 /// from the song when they left the field empty.
-fn titled(request: &CreateMusicJobRequest) -> String {
+fn titled(request: &CreateMusicJobRequest, library: &adapters::AdapterLibrary) -> String {
     request
         .title
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
-        .unwrap_or_else(|| auto_title::auto_title(&request.caption, &request.lyrics, request.lyrics.trim().is_empty()))
+        .unwrap_or_else(|| {
+            // the words that switch the song's LoRA on say nothing about it
+            let triggers: Vec<String> = request.adapters.iter().filter_map(|adapter| library.trigger_of(&adapter.id)).collect();
+            auto_title::auto_title(&auto_title::without_triggers(&request.caption, &triggers), &request.lyrics, request.lyrics.trim().is_empty())
+        })
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -5856,7 +5860,7 @@ async fn create_music_job(
                 client_ref: request.client_ref.clone(),
                 engine_id,
                 cover_prompt: request.cover_prompt.clone(),
-                title: Some(titled(&request)),
+                title: Some(titled(&request, &state.adapters)),
                 status: MusicJobStatus::Queued,
                 dispatch: MusicJobDispatch::Local,
                 phase: MusicJobPhase::Queued,
@@ -5987,7 +5991,7 @@ async fn create_openrouter_music_job(state: AppState, request: CreateMusicJobReq
     };
     let job = MusicJob {
         derived: None,
-        id: format!("openrouter-{}", uuid_suffix()), client_ref: request.client_ref.clone(), engine_id: engine_id.clone(), cover_prompt: request.cover_prompt.clone(), title: Some(titled(&request)), status: MusicJobStatus::Running,
+        id: format!("openrouter-{}", uuid_suffix()), client_ref: request.client_ref.clone(), engine_id: engine_id.clone(), cover_prompt: request.cover_prompt.clone(), title: Some(titled(&request, &state.adapters)), status: MusicJobStatus::Running,
         dispatch: MusicJobDispatch::OpenRouter, phase: MusicJobPhase::Running, caption: request.caption, lyrics: request.lyrics,
         duration_seconds: request.duration_seconds, generation_settings: stream_request.request.body.clone(), song: None, songs: vec![],
         message: "OpenRouter music stream started; the completed audio will be imported into the studio library.".into(),
