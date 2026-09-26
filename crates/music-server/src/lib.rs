@@ -120,6 +120,9 @@ struct MmServerClient {
 
 #[derive(Debug, Clone, Deserialize)]
 struct CreateMusicJobRequest {
+    /// The window's own mark for this request, handed back on the job so the
+    /// window knows the job as its own before the response reaches it.
+    client_ref: Option<String>,
     caption: String,
     lyrics: String,
     duration_seconds: f64,
@@ -211,6 +214,9 @@ struct MusicJob {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     derived: Option<Value>,
     id: String,
+    /// The mark the submitting window gave the request; absent for an agent's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_ref: Option<String>,
     engine_id: String,
     /// What the assistant said this track's cover should show, if anything.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -302,6 +308,8 @@ struct ReplayMusicJobRequest {
     dit_cfg: Option<f64>,
     output_format: Option<String>,
     models: Option<Mm3ModelSelection>,
+    /// The window's own mark, as on a new song.
+    client_ref: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -5774,6 +5782,7 @@ async fn create_music_job(
             let job = MusicJob {
                 derived: None,
                 id: remote.id,
+                client_ref: request.client_ref.clone(),
                 engine_id,
                 cover_prompt: request.cover_prompt.clone(),
                 title: Some(titled(&request)),
@@ -5852,7 +5861,7 @@ async fn replay_music_job(
     let mut job = MusicJob {
         derived: None,
         cover_prompt: None,
-        id: remote.id, engine_id: PRIMARY_MUSIC_ENGINE_ID.into(), title: source_title, status: MusicJobStatus::Queued,
+        id: remote.id, client_ref: request.client_ref.clone(), engine_id: PRIMARY_MUSIC_ENGINE_ID.into(), title: source_title, status: MusicJobStatus::Queued,
         dispatch: MusicJobDispatch::Local, phase: MusicJobPhase::Queued, caption, lyrics,
         duration_seconds: synth_request.get("duration").and_then(Value::as_f64).unwrap_or_default(), generation_settings: synth_request,
         song: None, songs: vec![], message: "Submitted replay synthesis to mm-server. audio_codes are present, so the autoregressive LM stage is skipped.".into(),
@@ -5906,7 +5915,7 @@ async fn create_openrouter_music_job(state: AppState, request: CreateMusicJobReq
     };
     let job = MusicJob {
         derived: None,
-        id: format!("openrouter-{}", uuid_suffix()), engine_id: engine_id.clone(), cover_prompt: request.cover_prompt.clone(), title: Some(titled(&request)), status: MusicJobStatus::Running,
+        id: format!("openrouter-{}", uuid_suffix()), client_ref: request.client_ref.clone(), engine_id: engine_id.clone(), cover_prompt: request.cover_prompt.clone(), title: Some(titled(&request)), status: MusicJobStatus::Running,
         dispatch: MusicJobDispatch::OpenRouter, phase: MusicJobPhase::Running, caption: request.caption, lyrics: request.lyrics,
         duration_seconds: request.duration_seconds, generation_settings: stream_request.request.body.clone(), song: None, songs: vec![],
         message: "OpenRouter music stream started; the completed audio will be imported into the studio library.".into(),
@@ -6457,6 +6466,7 @@ fn queued_not_configured_job(request: CreateMusicJobRequest, engine_id: String) 
         derived: None,
         cover_prompt: None,
         id: format!("unconfigured-{}", uuid_suffix()),
+        client_ref: request.client_ref.clone(),
         engine_id,
         title: request.title.clone(),
         status: MusicJobStatus::Queued,
@@ -6478,6 +6488,7 @@ fn failed_request_job(request: CreateMusicJobRequest, engine_id: String, error: 
         cover_prompt: None,
         title: request.title.clone(),
         id: format!("rejected-{}", uuid_suffix()),
+        client_ref: request.client_ref.clone(),
         engine_id,
         status: MusicJobStatus::Failed,
         dispatch: MusicJobDispatch::NotConfigured,
@@ -6539,6 +6550,17 @@ fn api_error(status: StatusCode, error: String) -> (StatusCode, Json<ApiError>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_window_mark_comes_back_on_the_job() {
+        let request: CreateMusicJobRequest = serde_json::from_value(serde_json::json!({ "caption": "synth-pop", "lyrics": "[Verse]", "duration_seconds": 60.0, "client_ref": "temp_1" })).unwrap();
+        let job = failed_request_job(request, "engine".into(), "x".into());
+        assert_eq!(serde_json::to_value(&job).unwrap()["client_ref"], "temp_1");
+
+        let agent: CreateMusicJobRequest = serde_json::from_value(serde_json::json!({ "caption": "synth-pop", "lyrics": "[Verse]", "duration_seconds": 60.0 })).unwrap();
+        let job = failed_request_job(agent, "engine".into(), "x".into());
+        assert!(serde_json::to_value(&job).unwrap().get("client_ref").is_none());
+    }
 
     #[test]
     fn models_are_found_in_subfolders_but_not_hidden_ones() {
@@ -6673,6 +6695,7 @@ mod tests {
     #[test]
     fn request_maps_only_confirmed_mm_server_fields() {
         let body = mm_request_from(&CreateMusicJobRequest {
+            client_ref: None,
             cover_prompt: None,
             adapters: Vec::new(),
             title: None,
@@ -6713,6 +6736,7 @@ mod tests {
     #[test]
     fn request_rejects_legacy_audio_formats_not_supported_by_mm_server() {
         let error = mm_request_from(&CreateMusicJobRequest {
+            client_ref: None,
             cover_prompt: None,
             adapters: Vec::new(),
             title: None,
@@ -6744,6 +6768,7 @@ mod tests {
     #[test]
     fn request_uses_confirmed_mm3_defaults_and_rejects_invalid_synth_batch() {
         let request = CreateMusicJobRequest {
+            client_ref: None,
             cover_prompt: None,
             adapters: Vec::new(),
             title: None,
@@ -6760,7 +6785,7 @@ mod tests {
         assert_eq!(body["peak_clip"], 10);
         assert_eq!(body["mp3_bitrate"], 320);
 
-        let invalid = CreateMusicJobRequest { synth_batch_size: Some(10), ..request };
+        let invalid = CreateMusicJobRequest { client_ref: None, synth_batch_size: Some(10), ..request };
         assert!(mm_request_from(&invalid, None, None, None).unwrap_err().contains("synth_batch_size"));
     }
 
@@ -6815,6 +6840,7 @@ mod tests {
     fn remote_statuses_never_claim_success_for_an_unknown_value() {
         let mut job = queued_not_configured_job(
             CreateMusicJobRequest {
+                client_ref: None,
                 cover_prompt: None,
                 adapters: Vec::new(),
                 title: None,
@@ -6854,7 +6880,7 @@ mod tests {
 
     #[test]
     fn replay_synthesis_keeps_audio_codes_and_only_applies_confirmed_synthesis_overrides() {
-        let request = ReplayMusicJobRequest { song_id: None, replay_request: None, steps: Some(42), seed: Some(9), dit_cfg: Some(1.9), output_format: Some("wav24".into()), models: Some(Mm3ModelSelection { dit_model: Some("dit-q6.gguf".into()), ..Default::default() }) };
+        let request = ReplayMusicJobRequest { client_ref: None, song_id: None, replay_request: None, steps: Some(42), seed: Some(9), dit_cfg: Some(1.9), output_format: Some("wav24".into()), models: Some(Mm3ModelSelection { dit_model: Some("dit-q6.gguf".into()), ..Default::default() }) };
         let replay = serde_json::json!({"caption":"night drive","lyrics":"[verse] hi","audio_codes":"1,2,3,4,5,6,7,8","lm_seed":123,"lm_cfg":1.5,"dit_cfg":1.7,"steps":30,"seed":1,"dit_model":"dit-q4.gguf"});
         let prepared = prepare_replay_synthesis(replay, &request).unwrap();
         assert_eq!(prepared["audio_codes"], "1,2,3,4,5,6,7,8");
@@ -6868,7 +6894,7 @@ mod tests {
 
     #[test]
     fn replay_without_audio_codes_is_rejected_before_mm_server_submission() {
-        let request = ReplayMusicJobRequest { song_id: None, replay_request: None, steps: None, seed: None, dit_cfg: None, output_format: None, models: None };
+        let request = ReplayMusicJobRequest { client_ref: None, song_id: None, replay_request: None, steps: None, seed: None, dit_cfg: None, output_format: None, models: None };
         assert!(prepare_replay_synthesis(serde_json::json!({"caption":"c","lyrics":"l"}), &request).is_err());
     }
 }

@@ -14,6 +14,8 @@ import { useI18n } from '../context/I18nContext';
 
 interface ReplayModalProps {
   song: Song;
+  /** The window's mark for this request, handed back on the job. */
+  clientRef: string;
   onClose: () => void;
   onQueued: (jobId: string) => void;
 }
@@ -21,7 +23,7 @@ interface ReplayModalProps {
 const CONTROL =
   'w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-pink-500 dark:border-white/10 dark:bg-black/20 dark:text-white';
 
-export const ReplayModal: React.FC<ReplayModalProps> = ({ song, onClose, onQueued }) => {
+export const ReplayModal: React.FC<ReplayModalProps> = ({ song, clientRef, onClose, onQueued }) => {
   const { t } = useI18n();
   const settings = (song.generationParams ?? {}) as Record<string, unknown>;
   const numberOr = (key: string, fallback: number) =>
@@ -47,7 +49,7 @@ export const ReplayModal: React.FC<ReplayModalProps> = ({ song, onClose, onQueue
       const response = await fetch('/v1/music/replay', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ song_id: song.id, steps, dit_cfg: ditCfg, seed: parsedSeed, output_format: format }),
+        body: JSON.stringify({ song_id: song.id, client_ref: clientRef, steps, dit_cfg: ditCfg, seed: parsedSeed, output_format: format }),
       });
       const body = await response.json().catch(() => null);
       if (!response.ok) throw new Error(body?.error || `Re-render failed (${response.status})`);
