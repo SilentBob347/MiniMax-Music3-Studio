@@ -10,6 +10,7 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use thiserror::Error;
 
+pub mod model;
 pub mod mm_server;
 pub mod mm_train;
 pub mod process_group;
