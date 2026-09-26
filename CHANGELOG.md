@@ -7,6 +7,10 @@ Windows build.
 
 ### Fixed
 
+- **The Instrumental switch works.** It sent the engine empty lyrics, which the engine refuses,
+  and the form asked for lyrics before it would even send: with the switch on, nothing could be
+  made (issue #4). An instrumental now goes out as the song's structure with no words under
+  its tags - the tags of the lyrics in the box, or a plain song shape.
 - **The writing assistant stops.** With Ollama the magic wand could not be stopped: the
   studio named no length, Ollama generates without end when none is named, and a small model
   that never closed the style string listed words until the app was restarted. Stop also left

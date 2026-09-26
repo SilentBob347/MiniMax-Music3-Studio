@@ -85,6 +85,14 @@ const numberOrUndefined = (value: string): number | undefined => {
 /** A rough token estimate, only used to warn before the engine rejects it. */
 const estimateTokens = (text: string) => Math.ceil(text.trim().length / 3.6);
 
+// The engine refuses empty lyrics, and an instrumental is written as a song's
+// structure with no words under its tags: the tags of the lyrics in the box,
+// their lines left out, or a plain song shape when the box has none.
+const instrumentalLyrics = (text: string) => {
+  const tags = text.split(/\r?\n/).map(line => line.trim()).filter(line => /^\[[^\]]+\]$/.test(line));
+  return (tags.length ? tags : ['[intro]', '[verse]', '[chorus]', '[verse]', '[chorus]', '[outro]']).join('\n\n');
+};
+
 const ICON =
   'rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-zinc-200 hover:text-black dark:hover:bg-white/10 dark:hover:text-white disabled:opacity-40';
 
@@ -414,7 +422,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
       // An instrumental has no words, whatever is still sitting in the box. The
       // lyrics of the previous track stayed there, went to the engine and came
       // back sung: the switch said instrumental and the track had vocals.
-      lyrics: instrumental ? '' : lyrics.replace(/\r\n?/g, '\n').trim(),
+      lyrics: instrumental ? instrumentalLyrics(lyrics) : lyrics.replace(/\r\n?/g, '\n').trim(),
       duration_seconds: Math.min(numberOrUndefined(duration) ?? 60, MAX_DURATION_SECONDS),
       steps: numberOrUndefined(steps) ?? 30,
       seed: randomizeSeed ? undefined : numberOrUndefined(seed),
@@ -618,7 +626,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
   const submit = () => {
     if (!ready) { setError(t('downloadProfileFirst')); return; }
     if (!caption.trim()) { setError(t('captionRequired')); return; }
-    if (!lyrics.trim()) { setError(t('lyricsRequired')); return; }
+    if (!instrumental && !lyrics.trim()) { setError(t('lyricsRequired')); return; }
     if (promptTokens > MAX_PROMPT_TOKENS) { setError(t('promptTooLong')); return; }
     setError(null);
     onGenerate(buildRequest());
