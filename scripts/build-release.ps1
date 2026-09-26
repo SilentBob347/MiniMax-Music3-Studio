@@ -147,6 +147,8 @@ try {
         Copy-Item -Destination $releaseDir -Force
 
     $portableRoot = Join-Path $releaseDir "MiniMax-Music3-Studio-$Version-portable"
+    # A second run copied the resources into the folders the first one left, one level deeper.
+    if (Test-Path $portableRoot) { Remove-Item -Recurse -Force $portableRoot }
     New-Item -ItemType Directory -Force -Path $portableRoot | Out-Null
     # The binary's name comes from tauri.conf.json, not from this script: it was
     # spelled out here as the crate name, so renaming the executable broke the
