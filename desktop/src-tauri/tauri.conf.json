@@ -14,6 +14,7 @@
       {
         "label": "main",
         "dragDropEnabled": false,
+        "create": false,
         "title": "MiniMax Music3 Studio",
         "width": 1440,
         "height": 960,

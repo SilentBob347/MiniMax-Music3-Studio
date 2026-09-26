@@ -21,6 +21,12 @@ Windows build.
 - **A model downloaded after the engine started** is found without restarting the studio, and
   **Find models and LoRA again** (Settings, Models, and the LoRA page) does the same for files
   put in the folders by hand. The engine restarts once the songs on it are done.
+- **An update installs over the studio it came from.** Started from the studio, the update
+  installer did not find the install folder and put a second copy into its default one, or
+  died with the studio before it began. It is given the folder and let go of now, as in
+  YuE2 Studio.
+- **An installed studio keeps its temporary files and its WebView2 profile beside itself**,
+  like its models and library, instead of on the system drive.
 
 ## 2026-09-25 — 2.1.1
 
