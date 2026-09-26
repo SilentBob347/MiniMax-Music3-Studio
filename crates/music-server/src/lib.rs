@@ -3270,7 +3270,8 @@ async fn rescan_resources(state: &AppState) -> Result<Value, String> {
                 break;
             }
         }
-        if !rendering {
+        // an engine that stopped answering has nothing left to finish
+        if !rendering || !state.music_server.health().await {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
