@@ -14,6 +14,10 @@ Windows build.
   server is now told how long each answer may be, a run that reaches it ends with a message
   instead of a wait, and Stop closes the connection, which is what makes the model stop.
   Stop is also there while the caption or the lyrics are written, not only the whole song.
+- **A local server's address saves as soon as it is typed.** The window asked every half-typed
+  address for its models, one request per keystroke, each waiting out its timeout, and the save
+  queued behind them for seconds: the wand could say no assistant was set up. The models are
+  asked for once the address stops changing.
 - **A song added to a dataset brings its lyrics** from its own tags (ID3 USLT, Vorbis
   LYRICS) when no text file lies beside it.
 
