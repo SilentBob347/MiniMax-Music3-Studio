@@ -3,6 +3,7 @@ import { karaokeReason } from '../services/karaoke';
 import { AlertTriangle, ChevronDown, CircleAlert, Dices, FolderOpen, Loader2, RotateCcw, Save, Sparkles, Square, Tags, Trash2, Wand2, Settings2, X } from 'lucide-react';
 import type { Music3Request, Song } from '../types';
 import { useI18n } from '../context/I18nContext';
+import { saveFile } from '../services/saveFile';
 import { useBridgeCommand } from '../services/mcpBridge';
 import { joinCaption, randomExample, splitCaption } from '../services/examples';
 import { AdapterPicker } from './AdapterPicker';
@@ -444,15 +445,10 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
     return request;
   };
 
-  const savePrompt = () => {
-    const request = buildRequest();
-    const blob = new Blob([JSON.stringify(request, null, 2)], { type: 'application/json' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `${(name.trim() || 'request').replace(/[\\/:*?"<>|]/g, '')}.json`;
-    link.click();
-    URL.revokeObjectURL(link.href);
-  };
+  const savePrompt = () => void saveFile(
+    `${(name.trim() || 'request').replace(/[\\/:*?"<>|]/g, '')}.json`,
+    { blob: new Blob([JSON.stringify(buildRequest(), null, 2)], { type: 'application/json' }) },
+  );
 
   const openPrompt = async (file: File) => {
     try {
@@ -490,6 +486,10 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
   // A run in progress can be given up on. The request is a stream that can
   // take minutes on a reasoning model, and without this the only way out of one
   // that went quiet was to close the studio.
+  // Without an assistant the wands open its settings: hidden, they left no
+  // sign that the studio can write a style or lyrics at all.
+  const openAssistantSetup = () => window.dispatchEvent(new CustomEvent('mm3:open-settings', { detail: 'models' }));
+
   const assistRun = useRef<AbortController | null>(null);
   const stopAssistant = () => {
     assistRun.current?.abort();
@@ -854,11 +854,9 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
             title={t('captionStructured')}
             actions={
               <>
-                {assistantReady && (
-                  <button type="button" onClick={() => void askAssistant('prompt')} disabled={assisting !== null} className={ICON} title={t('writeCaption')}>
-                    {assisting === 'prompt' ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} className="text-pink-500" />}
-                  </button>
-                )}
+                <button type="button" onClick={() => (assistantReady ? void askAssistant('prompt') : openAssistantSetup())} disabled={assistantReady && (assisting !== null)} className={ICON} title={assistantReady ? t('writeCaption') : t('setUpAssistant')}>
+                  {assisting === 'prompt' ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} className="text-pink-500" />}
+                </button>
                 <button type="button" onClick={loadExample} className={ICON} title={t('examplePrompt')}><Dices size={14} /></button>
                 <button type="button" onClick={() => promptFile.current?.click()} className={ICON} title={t('openPrompt')}><FolderOpen size={14} /></button>
                 <button type="button" onClick={savePrompt} className={ICON} title={t('savePrompt')}><Save size={14} /></button>
@@ -900,16 +898,12 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
                 >
                   {t('promptBudgetShort')} {promptTokens} / {MAX_PROMPT_TOKENS}
                 </span>
-                {assistantReady && (
-                  <button type="button" onClick={() => void layOutLyrics()} disabled={assisting !== null || !lyrics.trim()} className={ICON} title={t('formatLyrics')}>
-                    {assisting === 'sections' ? <Loader2 size={14} className="animate-spin" /> : <Tags size={14} />}
-                  </button>
-                )}
-                {assistantReady && (
-                  <button type="button" onClick={() => void askAssistant('lyrics')} disabled={assisting !== null} className={ICON} title={t('writeLyrics')}>
-                    {assisting === 'lyrics' ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} className="text-pink-500" />}
-                  </button>
-                )}
+                <button type="button" onClick={() => (assistantReady ? void layOutLyrics() : openAssistantSetup())} disabled={assistantReady && (assisting !== null || !lyrics.trim())} className={ICON} title={assistantReady ? t('formatLyrics') : t('setUpAssistant')}>
+                  {assisting === 'sections' ? <Loader2 size={14} className="animate-spin" /> : <Tags size={14} />}
+                </button>
+                <button type="button" onClick={() => (assistantReady ? void askAssistant('lyrics') : openAssistantSetup())} disabled={assistantReady && (assisting !== null)} className={ICON} title={assistantReady ? t('writeLyrics') : t('setUpAssistant')}>
+                  {assisting === 'lyrics' ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} className="text-pink-500" />}
+                </button>
                 <button type="button" onClick={() => setLyrics('')} className={ICON} title={t('resetPrompt')}><RotateCcw size={14} /></button>
               </>
             }
