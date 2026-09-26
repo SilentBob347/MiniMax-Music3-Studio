@@ -3,6 +3,19 @@
 What changed, newest first. Dates are release dates; the studio is versioned by its
 Windows build.
 
+## 2026-09-26 — 2.1.3
+
+### Fixed
+
+- **The writing assistant stops.** With Ollama the magic wand could not be stopped: the
+  studio named no length, Ollama generates without end when none is named, and a small model
+  that never closed the style string listed words until the app was restarted. Stop also left
+  the model writing, because the service went on reading an answer nobody waited for. A local
+  server is now told how long each answer may be, a run that reaches it ends with a message
+  instead of a wait, and Stop closes the connection, which is what makes the model stop.
+- **A song added to a dataset brings its lyrics** from its own tags (ID3 USLT, Vorbis
+  LYRICS) when no text file lies beside it.
+
 ## 2026-09-26 — 2.1.2
 
 ### Fixed
