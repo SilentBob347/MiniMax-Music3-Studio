@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { karaokeReason } from '../services/karaoke';
-import { AlertTriangle, ChevronDown, CircleAlert, Dices, FolderOpen, Loader2, RotateCcw, Save, Sparkles, Square, Tags, Trash2, Wand2, Settings2 } from 'lucide-react';
+import { AlertTriangle, ChevronDown, CircleAlert, Dices, FolderOpen, Loader2, RotateCcw, Save, Sparkles, Square, Tags, Trash2, Wand2, Settings2, X } from 'lucide-react';
 import type { Music3Request, Song } from '../types';
 import { useI18n } from '../context/I18nContext';
 import { useBridgeCommand } from '../services/mcpBridge';
@@ -819,7 +819,10 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
                   {assistStage === 'done' && t('assistStageDone')}
                   {!assistStage && t('assistStagePreparing')}
                 </span>
-                <span className="tabular-nums text-zinc-400">{assistSeconds} {t('secondsShort')}</span>
+                <span className="flex items-center gap-2">
+                  <span className="tabular-nums text-zinc-400">{assistSeconds} {t('secondsShort')}</span>
+                  <button type="button" onClick={stopAssistant} className={ICON} title={t('cancelDownload')}><X size={13} /></button>
+                </span>
               </div>
               {assistModel && <p className="mt-1 truncate text-[11px] text-zinc-500">{assistModel}</p>}
               {assistDraft && (

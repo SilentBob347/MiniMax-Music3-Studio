@@ -13,6 +13,7 @@ Windows build.
   the model writing, because the service went on reading an answer nobody waited for. A local
   server is now told how long each answer may be, a run that reaches it ends with a message
   instead of a wait, and Stop closes the connection, which is what makes the model stop.
+  Stop is also there while the caption or the lyrics are written, not only the whole song.
 - **A song added to a dataset brings its lyrics** from its own tags (ID3 USLT, Vorbis
   LYRICS) when no text file lies beside it.
 
