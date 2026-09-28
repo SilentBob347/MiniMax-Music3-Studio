@@ -177,6 +177,13 @@ weights, downloaded only when you open training. Describing songs by ear needs a
 12 GB of VRAM and 10 GB more disk for MOSS-Music; without it the captions are written by
 hand.
 
+**If the installer stops on WebView2.** The studio's window runs on Microsoft Edge WebView2,
+and the installer fetches it when Windows lacks it. On a blocked or unsteady connection, or on
+Windows 10 builds that refuse Microsoft's small bootstrapper (error 0x80040902), that fetch
+fails and the installer says so. Install WebView2 from Microsoft's standalone installer,
+[Evergreen Standalone x64](https://go.microsoft.com/fwlink/p/?LinkId=2124701), then run the
+studio's installer again.
+
 ## Drive it from an agent (MCP)
 
 While the studio is open it serves MCP at `http://127.0.0.1:8765/mcp`: an agent such as
