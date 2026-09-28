@@ -23,6 +23,37 @@
   "version": 1,
   "adapters": [
     {
+      "id": "mm3-turbo-8step",
+      "engine": "minimaxmusic-cpp",
+      "kind": "sound",
+      "author": "guillaume127",
+      "page": "https://huggingface.co/guillaume127/MiniMax-Music-3-Turbo-FP8",
+      "name": {
+        "en": "Turbo: 8 steps",
+        "ru": "Турбо: 8 шагов",
+        "zh": "极速：8 步",
+        "ja": "ターボ：8 ステップ",
+        "ko": "터보: 8스텝"
+      },
+      "description": {
+        "en": "A distilled LoRA for the sound half: songs in 8 steps instead of the full count. Set the steps to 8 in the Create form when it is on.",
+        "ru": "Дистиллированная LoRA звуковой половины: песня за 8 шагов вместо полного числа. Когда она включена, поставьте в форме создания 8 шагов.",
+        "zh": "声音部分的蒸馏 LoRA：8 步生成歌曲，而不是完整步数。启用时，请在创作表单中把步数设为 8。",
+        "ja": "サウンド側の蒸留 LoRA：フルステップではなく 8 ステップで曲を作ります。使うときは作成フォームのステップを 8 にしてください。",
+        "ko": "사운드 부분용 증류 LoRA: 전체 스텝 대신 8스텝으로 곡을 만듭니다. 켰을 때는 만들기 양식에서 스텝을 8로 설정하세요."
+      },
+      "scales": {
+        "dit": 1
+      },
+      "files": [
+        {
+          "url": "https://huggingface.co/guillaume127/MiniMax-Music-3-Turbo-FP8/resolve/609cdaa15520b9cef4e4ee9189792f17262b38d8/minimax_music3_turbo_lora_8step.safetensors",
+          "file": "minimax_music3_turbo_lora_8step.safetensors",
+          "bytes": 188810064
+        }
+      ]
+    },
+    {
       "id": "mm3-slider-female",
       "engine": "minimaxmusic-cpp",
       "kind": "slider",
