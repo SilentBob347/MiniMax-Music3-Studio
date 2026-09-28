@@ -3,6 +3,58 @@
 What changed, newest first. Dates are release dates; the studio is versioned by its
 Windows build.
 
+## 2026-09-29 — 3.1.0
+
+### Added
+
+- **LoRA for ComfyUI.** A trained LoRA is saved as one file for ComfyUI's native MiniMax Music 3:
+  the language model's LoRA with its alpha inside, loaded with the stock LoRA loader on the CLIP.
+  On the LoRA page and as `lora_export_comfyui` for agents.
+- **The studio from another computer** (Settings - Appearance - Access from the network, off by
+  default). The service listens on the network and hands a browser the studio itself; the access
+  key is shown in the settings and asked once. A tunnel or proxy on the same computer needs the
+  key too.
+- **The card to compute on.** With two or more NVIDIA cards, Settings - Engine picks the one the
+  engine, the trainer and the assistant run on.
+- **Stop after this track**, a fourth position of the repeat button.
+- **Player buttons in the sidebar** can be hidden: Winamp, equalizer, visualiser.
+- **Without stopping and bigger queues.** The Create form takes more than ten songs at once, and
+  "Without stopping" keeps making songs from the form as it was when turned on. New songs can go
+  straight into a playlist, the cloud ones too.
+- **Stems of any library track**, imported ones included, from the song's panel.
+- **A key for your own assistant server** (Settings - Assistant).
+- **A switch for the stock photo** of a track without a cover (Settings - Cover art), on by
+  default as before; off, the track shows its drawn pattern and nothing is fetched.
+- AIFF and Apple Lossless (ALAC) files are read wherever audio is taken.
+
+### Fixed
+
+- **Preparation without an assistant** no longer fails every song: it says an assistant lays out
+  the lyrics, with "Set up the assistant" and "Take as they are".
+- **The writing wand** explains why it opens the assistant settings: music models do not write
+  lyrics, and the built-in assistant is one button away.
+- **A song lost to an engine restart** says why - out of video memory, a CUDA error - instead of
+  a bare "job not found".
+- **The assistant on GTX 900 and 10-series cards and older drivers**: llama.cpp's CUDA 12 build
+  where CUDA 13 does not run.
+- **WebView2 that will not install** stops the installer with a plain message and Microsoft's
+  standalone installer link.
+- **A slow training run says why**: it shows what it computes on, and warns when that is the
+  processor or when the card's memory is full.
+- The training card could fail while a run was going; playlist durations showed NaN; a suggested
+  cloud model never filled in; a song title and creator answered clicks with an error.
+- An assistant answer no longer carries the model's reasoning into a style or lyrics.
+- Engine calls ride out a dropped local connection instead of failing the song.
+- MOSS-Music describes the whole track, not its intro.
+
+### Updated
+
+- The minimaxmusic.cpp engine with upstream's ggml and its DiT padding fix, llama.cpp b11236, the
+  HOT-Step trainer at 3e7a0778.
+- Tauri 2.12, React 19.3, Vite 8, Tailwind 4, TypeScript 7, vitest 5, lucide 1; Rust crates on
+  their current majors (reqwest 0.13, symphonia 0.6, rusqlite 0.40, sysinfo 0.39, tower-http 0.7,
+  zip 8, ort 2.0.0-rc.13).
+
 ## 2026-09-26 — 3.0.0
 
 ### Added
