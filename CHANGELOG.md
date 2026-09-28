@@ -25,6 +25,8 @@ Windows build.
 - **A key for your own assistant server** (Settings - Assistant).
 - **A switch for the stock photo** of a track without a cover (Settings - Cover art), on by
   default as before; off, the track shows its drawn pattern and nothing is fetched.
+- **MiniMax Music 3 Turbo in the LoRA catalogue**: guillaume127's distilled 8-step LoRA for the
+  sound half.
 - AIFF and Apple Lossless (ALAC) files are read wherever audio is taken.
 
 ### Fixed
