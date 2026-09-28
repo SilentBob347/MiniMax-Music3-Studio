@@ -648,6 +648,11 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
   // again with new seeds whenever the queue runs low, until switched off. A
   // snapshot, so editing the form meanwhile does not change the next songs.
   const [forever, setForever] = useState(false);
+  useEffect(() => {
+    const stop = () => setForever(false);
+    window.addEventListener('mm3:cancel-all', stop);
+    return () => window.removeEventListener('mm3:cancel-all', stop);
+  }, []);
   const foreverRequest = useRef<(Music3Request & { _tempId?: string }) | null>(null);
   useEffect(() => {
     if (!forever) { foreverRequest.current = null; return; }

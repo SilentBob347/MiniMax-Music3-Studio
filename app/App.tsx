@@ -548,9 +548,6 @@ function AppContent() {
   // change (generation import, replay, audio import).
   useEffect(() => {
     void refreshNativeLibrary();
-    const reload = () => { void refreshNativeLibrary(); };
-    window.addEventListener('music3-library-changed', reload);
-    return () => window.removeEventListener('music3-library-changed', reload);
   }, [refreshNativeLibrary]);
 
 
@@ -897,8 +894,19 @@ function AppContent() {
     preflightAbortersRef.current.forEach(aborter => aborter.abort());
     preflightAbortersRef.current.clear();
 
+    // "Without stopping" would send the form again the moment the queue empties
+    window.dispatchEvent(new CustomEvent('mm3:cancel-all'));
     const running = [...activeJobsRef.current.entries()];
     await Promise.all(running.map(([jobId]) => stopEngineJob(jobId)));
+    // The service's list, not only this window's: a request whose answer is
+    // still on its way back is on neither list here, and would run to the end.
+    const response = await fetch('/v1/music/jobs');
+    if (response.ok) {
+      const listed: Array<{ id: string }> = await response.json();
+      await Promise.all(listed.filter(job => !activeJobsRef.current.has(job.id)).map(job => stopEngineJob(job.id)));
+    } else {
+      console.error(`Cancel all: the running jobs did not load (${response.status})`);
+    }
     running.forEach(([, { pollInterval }]) => clearInterval(pollInterval));
     const tempIds = new Set(running.map(([, job]) => job.tempId));
     activeJobsRef.current.clear();
@@ -1446,10 +1454,19 @@ function AppContent() {
   }, []);
 
   // Covers and karaoke timings finish after the track is already on screen.
+  // Every song written or removed, by this window or any other: six stems or a
+  // batch delete arrive as one burst and are read once.
   useEffect(() => {
-    const reload = () => void refreshNativeLibrary();
+    let timer = 0;
+    const reload = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => void refreshNativeLibrary(), 200);
+    };
     window.addEventListener('mm3:library-changed', reload);
-    return () => window.removeEventListener('mm3:library-changed', reload);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('mm3:library-changed', reload);
+    };
   }, [refreshNativeLibrary]);
 
   // Background work reports its outcome here once, and the toast goes away.
