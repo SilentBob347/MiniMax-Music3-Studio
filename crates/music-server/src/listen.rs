@@ -6,7 +6,7 @@
 //! tempo and key it states are replaced with the ones `audio_facts` measured,
 //! and the genre in Basic Attributes comes from the plain caption's tags.
 //!
-//! Prompts, sampling and the caption clean-up follow HOT-Step-CPP 8a5e42c4:
+//! Prompts, sampling and the caption clean-up follow HOT-Step-CPP 3e7a0778:
 //! server/src/services/training/{captionPrompt,mossCaption}.ts.
 
 use std::{collections::HashMap, path::Path, process::Command};
