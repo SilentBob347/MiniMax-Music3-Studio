@@ -6703,22 +6703,51 @@ impl MmServerClient {
     }
 
     async fn submit(&self, request: Value) -> anyhow::Result<MmServerSubmitResponse> {
-        self.json_response(self.http.post(self.url("/synth")).json(&request).send().await?)
+        self.json_response(self.send(self.http.post(self.url("/synth")).json(&request), false).await?)
             .await
     }
 
+    /// Sends a request to the engine on loopback, again when the connection
+    /// drops under it: a refused connection on any method, since nothing was
+    /// sent, and a reset mid-request only for a read. Three tries, a short
+    /// pause between. A blip that polling rode out made a submission fail.
+    async fn send(&self, request: reqwest::RequestBuilder, read: bool) -> anyhow::Result<reqwest::Response> {
+        let dropped = |error: &reqwest::Error| {
+            let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
+            while let Some(cause) = source {
+                if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+                    return matches!(io.kind(), std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::BrokenPipe);
+                }
+                source = cause.source();
+            }
+            false
+        };
+        let mut attempt = 0u64;
+        loop {
+            let Some(copy) = request.try_clone() else { return Ok(request.send().await?) };
+            match copy.send().await {
+                Ok(response) => return Ok(response),
+                Err(error) if attempt < 2 && (error.is_connect() || (read && dropped(&error))) => {
+                    attempt += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(300 * attempt)).await;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+
     async fn job(&self, job_id: &str) -> anyhow::Result<MmServerJobResponse> {
-        self.json_response(self.http.get(self.url("/job")).query(&[("id", job_id)]).send().await?)
+        self.json_response(self.send(self.http.get(self.url("/job")).query(&[("id", job_id)]), true).await?)
             .await
     }
 
     async fn cancel(&self, job_id: &str) -> anyhow::Result<MmServerJobResponse> {
-        self.json_response(self.http.post(self.url("/job")).query(&[("id", job_id), ("cancel", "1")]).send().await?)
+        self.json_response(self.send(self.http.post(self.url("/job")).query(&[("id", job_id), ("cancel", "1")]), false).await?)
             .await
     }
 
     async fn result(&self, job_id: &str) -> anyhow::Result<MmServerResultResponse> {
-        let response = self.http.get(self.url("/job")).query(&[("id", job_id), ("result", "1")]).send().await?;
+        let response = self.send(self.http.get(self.url("/job")).query(&[("id", job_id), ("result", "1")]), true).await?;
         let status = response.status();
         if !status.is_success() { anyhow::bail!("mm-server returned {status}: {}", response.text().await?); }
         let content_type = response.headers().get(reqwest::header::CONTENT_TYPE).and_then(|value| value.to_str().ok()).unwrap_or("").to_owned();
