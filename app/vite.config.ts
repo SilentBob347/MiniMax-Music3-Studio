@@ -1,6 +1,7 @@
 import path from 'path';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
@@ -34,18 +35,18 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         // the visualiser's own window is a second page
         input: {
-          main: path.resolve(__dirname, 'index.html'),
-          visualizer: path.resolve(__dirname, 'visualizer.html'),
+          main: path.resolve(import.meta.dirname, 'index.html'),
+          visualizer: path.resolve(import.meta.dirname, 'visualizer.html'),
         },
       },
     },
     optimizeDeps: {
       exclude: ['@ffmpeg/ffmpeg', '@ffmpeg/util'],
     },
-    plugins: [react()],
+    plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(import.meta.dirname, '.'),
       }
     }
   };
