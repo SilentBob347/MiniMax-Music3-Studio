@@ -101,6 +101,8 @@ export interface Music3Request {
   title?: string;
   /** LoRA adapters for this song, each with a strength per engine slot. */
   adapters?: { id: string; scales: Record<string, number> }[];
+  /** The playlist the made songs are added to: a project being worked on. */
+  playlist_id?: string;
 }
 
 export interface Music3JobSong {
