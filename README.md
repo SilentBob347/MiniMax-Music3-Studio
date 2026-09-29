@@ -195,7 +195,7 @@ studio's installer again.
 | Stems · HT-Demucs | CUDA | processor | processor |
 | Karaoke timing · Parakeet | CUDA | DirectML | processor |
 | Karaoke timing · Whisper | CUDA | processor | processor |
-| Writing assistant · llama.cpp | CUDA | processor | processor |
+| Writing assistant · llama.cpp | CUDA | Vulkan | processor |
 | Audio to MIDI · MuScriptor | CUDA | processor | processor |
 
 **The paths for AMD and Intel cards (Vulkan, DirectML) and work on the processor are
