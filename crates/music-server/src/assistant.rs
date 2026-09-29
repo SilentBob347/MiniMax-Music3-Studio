@@ -282,11 +282,29 @@ pub fn user_message(request: &AssistRequest) -> String {
         ),
         AssistTarget::Transcript => format!("Transcript:\n{description}"),
         AssistTarget::Sheet => format!("Lyric sheet:\n{description}"),
-        AssistTarget::Prompt => format!(
-            "Sound instruction: {}\nCurrent lyrics, keep the structured prompt coherent with them:\n{}{instrumental}",
-            if brief.is_empty() { "(none — describe a sound that fits the lyrics)" } else { brief },
-            request.lyrics.trim(),
-        ),
+        AssistTarget::Prompt => {
+            // the structured prompt the user wrote is what the instruction works on, not a blank page (#33)
+            let mut written = String::new();
+            for (label, value) in [
+                ("Global metadata", &request.global_metadata),
+                ("Vocal details", &request.vocal_details),
+                ("Arrangement", &request.arrangement),
+            ] {
+                let value = value.trim();
+                if !value.is_empty() {
+                    written.push_str(&format!("\n{label} (the user wrote this - keep it, build around it):\n{value}"));
+                }
+            }
+            format!(
+                "Sound instruction: {}{written}\nCurrent lyrics, keep the structured prompt coherent with them:\n{}{instrumental}",
+                match (brief.is_empty(), written.is_empty()) {
+                    (false, _) => brief,
+                    (true, true) => "(none — describe a sound that fits the lyrics)",
+                    (true, false) => "(none - refine the structured prompt the user wrote)",
+                },
+                request.lyrics.trim(),
+            )
+        }
         AssistTarget::All => {
             // Whatever the user already wrote is material, not noise: it goes to
             // the model so the rest is built around it instead of replacing it.
@@ -376,7 +394,10 @@ pub fn draft_schema(required: &[&str]) -> Value {
     // while leaving the field blank on screen.
     let text = serde_json::json!({ "type": "string", "minLength": 40 });
     let lyric = serde_json::json!({ "type": "string", "minLength": 20 });
-    let short = serde_json::json!({ "type": "string", "minLength": 3 });
+    // A short field has a ceiling too: a string without `maxLength` is unbounded
+    // in the grammar, and a model that loops inside a title runs to the token
+    // limit (YuE2 #32).
+    let short = |ceiling: u32| serde_json::json!({ "type": "string", "minLength": 3, "maxLength": ceiling });
     serde_json::json!({
         "type": "object",
         "properties": {
@@ -384,8 +405,8 @@ pub fn draft_schema(required: &[&str]) -> Value {
             "global_metadata": text,
             "vocal_details": text,
             "arrangement": text,
-            "title": short,
-            "cover_prompt": short,
+            "title": short(80),
+            "cover_prompt": short(300),
             "duration_seconds": { "type": "number" },
         },
         "required": required,
@@ -991,6 +1012,23 @@ mod tests {
             duration_seconds: 90.0,
             instrumental: false,
         }
+    }
+
+    #[test]
+    fn a_prompt_edit_starts_from_the_prompt_the_user_wrote() {
+        let message = user_message(&request(AssistTarget::Prompt));
+        assert!(message.contains("Basic Attributes: bpm is 110."));
+        assert!(message.contains("Singer A (Female)"));
+        assert!(message.contains("keep it, build around it"));
+        let blank = AssistRequest { global_metadata: String::new(), vocal_details: String::new(), arrangement: String::new(), description: String::new(), ..request(AssistTarget::Prompt) };
+        assert!(user_message(&blank).contains("describe a sound that fits the lyrics"));
+    }
+
+    #[test]
+    fn a_short_field_has_a_ceiling_so_a_model_cannot_loop_in_it() {
+        let schema = draft_schema(&["global_metadata"]);
+        assert_eq!(schema["properties"]["title"]["maxLength"], 80);
+        assert_eq!(schema["properties"]["cover_prompt"]["maxLength"], 300);
     }
 
     /// Each target must ask for exactly the fields it will write back, otherwise
