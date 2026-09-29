@@ -22,4 +22,12 @@ describe('Music3 model catalog helpers', () => {
     expect(componentPrecision(components[0])).toBe('Q5_K_M');
     expect(componentPrecision(components[2])).toBe('F32');
   });
+
+  it('names the community quantisations by their type, not their id', () => {
+    const community = (id: string, filename: string): Music3Component => ({ id, kind: 'lm', filename, bytes: 1, sha256: 'f' });
+    expect(componentPrecision(community('lm-q4-s', 'mm3-lm-Q4_K_S.gguf'))).toBe('Q4_K_S');
+    expect(componentPrecision(community('lm-q3', 'mm3-lm-Q3_K_M.gguf'))).toBe('Q3_K_M');
+    expect(componentPrecision(community('lm-mxfp4', 'mm3-lm-MXFP4.gguf'))).toBe('MXFP4');
+    expect(componentPrecision(community('lm-nvfp4', 'mm3-lm-NVFP4.gguf'))).toBe('NVFP4');
+  });
 });

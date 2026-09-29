@@ -19,7 +19,8 @@ const labels: Record<(typeof MUSIC3_COMPONENT_KINDS)[number], string> = {
 export const componentKindLabel = (kind: string) => labels[kind as keyof typeof labels] || kind;
 
 export const componentPrecision = (component: Music3Component) => {
-  const matched = component.filename.match(/-(BF16|F32|Q\d+(?:_K(?:_M)?|_0)?)\.gguf$/i);
+  // every catalog file ends in -<ggml type>.gguf
+  const matched = component.filename.match(/-([A-Z0-9_]+)\.gguf$/i);
   return matched?.[1]?.toUpperCase() || component.id;
 };
 
