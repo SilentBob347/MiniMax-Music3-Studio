@@ -184,6 +184,37 @@ fails and the installer says so. Install WebView2 from Microsoft's standalone in
 [Evergreen Standalone x64](https://go.microsoft.com/fwlink/p/?LinkId=2124701), then run the
 studio's installer again.
 
+## What runs where
+
+| Part | NVIDIA | AMD, Intel | No graphics card |
+| --- | --- | --- | --- |
+| Making songs · minimaxmusic.cpp | CUDA | Vulkan | processor |
+| Training a LoRA · music-train | CUDA | not available | not available |
+| Style by ear · MOSS-Music | CUDA | processor | processor |
+| Tempo and key · Beat This!, S-KEY | CUDA | DirectML | processor |
+| Stems · HT-Demucs | CUDA | processor | processor |
+| Karaoke timing · Parakeet | CUDA | DirectML | processor |
+| Karaoke timing · Whisper | CUDA | processor | processor |
+| Writing assistant · llama.cpp | CUDA | processor | processor |
+| Audio to MIDI · MuScriptor | CUDA | processor | processor |
+
+**The paths for AMD and Intel cards (Vulkan, DirectML) and work on the processor are
+experimental:** they exist for computers where the studio would not run at all otherwise.
+The main, tested path is an NVIDIA card.
+
+- Training needs an NVIDIA card with 22 GB of video memory or more. The trainer has no other
+  path, and on the processor one run would take days, so on any other machine the studio
+  does not offer the training files.
+- On AMD and Intel cards stems are separated on the processor: the HT-Demucs model does not
+  run through DirectML (out of memory on a 2 GB integrated card, over 20 GB and minutes for
+  30 seconds of audio on a 24 GB one).
+- Karaoke's Parakeet and the tempo and key models reach any DirectX 12 card through
+  DirectML. Its runtime - ONNX Runtime 1.24.4 DirectML and DirectML 1.15.4, about 215 MB -
+  comes with the card path; the studio loads its own DirectML rather than the older copy
+  inside Windows.
+- "Auto" in a device choice takes the card when its runtime is installed, and the processor
+  otherwise. The same table is in the studio, under Settings → Models.
+
 ## Drive it from an agent (MCP)
 
 While the studio is open it serves MCP at `http://127.0.0.1:8765/mcp`: an agent such as
