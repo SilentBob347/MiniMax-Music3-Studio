@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { libraryChanged, setupStatusChanged, useActivity, useAssistantStatus, useSetupStatus, type ActivityEntry } from '../services/studioQueries';
 import { karaokeReason } from '../services/karaoke';
 import { AlertTriangle, ChevronDown, CircleAlert, Dices, FolderOpen, Loader2, RotateCcw, Save, Sparkles, Square, Tags, Trash2, Wand2, Settings2, X } from 'lucide-react';
 import type { Music3Request, Playlist, Song } from '../types';
@@ -8,6 +9,7 @@ import { useBridgeCommand } from '../services/mcpBridge';
 import { joinCaption, randomExample, splitCaption } from '../services/examples';
 import { AdapterPicker } from './AdapterPicker';
 import { CreatePlaylistModal } from './PlaylistModals';
+import { SlideToEnable } from './SlideToEnable';
 import { usesFromSettings, type AdapterUse } from '../services/adapters';
 
 /**
@@ -33,7 +35,7 @@ import { usesFromSettings, type AdapterUse } from '../services/adapters';
  */
 
 interface CreatePanelProps {
-  onGenerate: (request: Music3Request & { _tempId?: string }) => void;
+  onGenerate: (request: Music3Request) => void;
   isGenerating: boolean;
   activeJobCount?: number;
   initialData?: { song: Song; timestamp: number } | null;
@@ -72,6 +74,13 @@ type EngineCatalog = {
 
 /** 9000 acoustic frames at 25 frames per second, as the model card states. */
 const MAX_DURATION_SECONDS = 360;
+/** The max duration last set by hand, kept between sessions like the playlist; '' is the engine's default. */
+const keptDuration = (): string => {
+  try {
+    const kept = Number(window.localStorage.getItem('studio.createDuration'));
+    return kept >= 10 && kept <= MAX_DURATION_SECONDS ? String(kept) : '';
+  } catch { return ''; }
+};
 /** The tokenized caption + lyrics budget the engine enforces at submit. */
 const MAX_PROMPT_TOKENS = 5000;
 
@@ -234,6 +243,8 @@ const Pane: React.FC<{
   </div>
 );
 
+const NO_ACTIVITY: ActivityEntry[] = [];
+
 export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerating, activeJobCount = 0, initialData, playlists, onCreatePlaylist }) => {
   const { t } = useI18n();
 
@@ -248,7 +259,11 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
   const [randomizeSeed, setRandomizeSeed] = useState(true);
 
   // Parameters are strings so an empty field can mean "engine default".
-  const [duration, setDuration] = useState('');
+  const [duration, setDuration] = useState(keptDuration);
+  const chooseDuration = (value: string) => {
+    setDuration(value);
+    try { window.localStorage.setItem('studio.createDuration', value); } catch { /* kept until a reload */ }
+  };
   const [lmSeed, setLmSeed] = useState('');
   const [lmCfg, setLmCfg] = useState('');
   const [lmTopK, setLmTopK] = useState('');
@@ -281,13 +296,15 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
     });
   }, []);
 
-  const [setup, setSetup] = useState<SetupStatus | null>(null);
+  const setupQuery = useSetupStatus<SetupStatus>();
+  const setup = setupQuery.isError ? null : setupQuery.data ?? null;
   // "Nobody answered" and "the engine says it has no models" are different
   // problems, and telling the user to download 12 GB when the service is simply
   // down is a lie.
-  const [serviceDown, setServiceDown] = useState(false);
+  const serviceDown = setupQuery.isError;
   const [catalog, setCatalog] = useState<EngineCatalog | null>(null);
-  const [assistantReady, setAssistantReady] = useState(false);
+  const assistantQuery = useAssistantStatus<{ available?: boolean }>();
+  const assistantReady = !assistantQuery.isError && assistantQuery.data?.available === true;
   const [assisting, setAssisting] = useState<'all' | 'lyrics' | 'prompt' | 'sections' | null>(null);
   // What the assistant is doing right now, and what it has written so far.
   const [assistStage, setAssistStage] = useState<string | null>(null);
@@ -298,28 +315,19 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
   const [coverPrompt, setCoverPrompt] = useState('');
   // What the studio is doing to finished tracks: covers and karaoke timings run
   // after generation, and used to run in complete silence.
-  const [activity, setActivity] = useState<Array<{ song_id: string; title: string; kind: string; state: string; detail?: string }>>([]);
+  const activityQuery = useActivity();
+  const activity = activityQuery.data ?? NO_ACTIVITY;
+  // Finished work changes the track on screen - a cover appears, timings
+  // arrive - so the library is read again for it. What was finished before
+  // the page opened is in the library already.
+  const finishedWork = useRef<string | null>(null);
   useEffect(() => {
-    // Finished work changes the track on screen - a cover appears, timings
-    // arrive - so the library is told to reread it rather than waiting for the
-    // next thing that happens to reload the list.
-    let finished = '';
-    const read = () => void fetch('/v1/activity')
-      .then(response => response.json())
-      .then((body: { activity?: typeof activity }) => {
-        const entries = body.activity ?? [];
-        const done = entries.filter(entry => entry.state === 'done').map(entry => `${entry.song_id}:${entry.kind}`).join(',');
-        if (done !== finished) {
-          finished = done;
-          window.dispatchEvent(new CustomEvent('mm3:library-changed'));
-        }
-        setActivity(entries);
-      })
-      .catch(() => undefined);
-    read();
-    const timer = window.setInterval(read, 2000);
-    return () => window.clearInterval(timer);
-  }, []);
+    const entries = activityQuery.data;
+    if (!entries) return;
+    const done = entries.filter(entry => entry.state === 'done').map(entry => `${entry.song_id}:${entry.kind}`).join(',');
+    if (finishedWork.current !== null && done !== finishedWork.current) libraryChanged();
+    finishedWork.current = done;
+  }, [activityQuery.data]);
   // A local model takes tens of seconds to answer. A spinner alone reads as a
   // hung button, so the panel counts the seconds out loud.
   const [assistSeconds, setAssistSeconds] = useState(0);
@@ -349,19 +357,6 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
     return () => window.clearInterval(timer);
   }, [assisting]);
 
-  const refreshSetup = useCallback(async () => {
-    const response = await fetch('/setup/status');
-    if (!response.ok) throw new Error(String(response.status));
-    setSetup(await response.json());
-    setServiceDown(false);
-  }, []);
-
-  useEffect(() => {
-    const poll = () => void refreshSetup().catch(() => { setSetup(null); setServiceDown(true); });
-    poll();
-    const timer = window.setInterval(poll, 5000);
-    return () => window.clearInterval(timer);
-  }, [refreshSetup]);
 
   useEffect(() => {
     void fetch('/v1/local-models/music')
@@ -370,22 +365,6 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
       .catch(() => setCatalog(null));
   }, [setup?.engine_ready]);
 
-  useEffect(() => {
-    // Asked once at mount, the panel kept saying "configure the assistant"
-    // long after the assistant had been configured. It is asked again while it
-    // is not ready, and whenever the settings are closed.
-    const read = () => void fetch('/v1/assistant/status')
-      .then(response => (response.ok ? response.json() : Promise.reject(new Error())))
-      .then((body: { available?: boolean }) => setAssistantReady(body.available === true))
-      .catch(() => setAssistantReady(false));
-    read();
-    const timer = window.setInterval(read, 5000);
-    window.addEventListener('mm3:settings-changed', read);
-    return () => {
-      window.clearInterval(timer);
-      window.removeEventListener('mm3:settings-changed', read);
-    };
-  }, []);
 
   useEffect(() => {
     if (!initialData?.song) return;
@@ -412,7 +391,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
 
   const reset = () => {
     setName(''); setGlobalMetadata(''); setVocalDetails(''); setArrangement(''); setLyrics(''); setInstrumental(false);
-    setDuration(''); setLmSeed(''); setLmCfg(''); setLmTopK(''); setAudioCodes('');
+    setDuration(keptDuration()); setLmSeed(''); setLmCfg(''); setLmTopK(''); setAudioCodes('');
     setSteps(''); setDitCfg(''); setSynthBatch(''); setSeed('');
     setPeakClip(''); setMp3Bitrate('320'); setFormat('mp3'); setModels({}); setAdapters([]);
     setError(null);
@@ -662,7 +641,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
     window.addEventListener('mm3:cancel-all', stop);
     return () => window.removeEventListener('mm3:cancel-all', stop);
   }, []);
-  const foreverRequest = useRef<(Music3Request & { _tempId?: string }) | null>(null);
+  const foreverRequest = useRef<Music3Request | null>(null);
   useEffect(() => {
     if (!forever) { foreverRequest.current = null; return; }
     const snapshot = foreverRequest.current;
@@ -754,7 +733,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
   ];
 
   const resetParameters = () => {
-    setDuration(''); setLmSeed(''); setLmCfg(''); setLmTopK(''); setAudioCodes('');
+    chooseDuration(''); setLmSeed(''); setLmCfg(''); setLmTopK(''); setAudioCodes('');
     setSteps(''); setDitCfg(''); setSynthBatch(''); setSeed(''); setRandomizeSeed(true);
     setPeakClip(''); setMp3Bitrate('320'); setFormat('mp3'); setModels({});
   };
@@ -994,7 +973,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
                 max={MAX_DURATION_SECONDS}
                 step={5}
                 suffix=" s"
-                onChange={setDuration}
+                onChange={chooseDuration}
               />
               <p className="text-[11px] leading-4 text-zinc-500">{t('maxDurationHint')}</p>
               <SliderRow
@@ -1157,7 +1136,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
             >
               {t('profile')}: <b className="text-zinc-700 underline decoration-dotted underline-offset-2 dark:text-zinc-200">{profileLabel}</b>
             </button>
-            <button type="button" onClick={() => void refreshSetup().catch(() => undefined)} className="hover:text-pink-500">{t('refresh')}</button>
+            <button type="button" onClick={setupStatusChanged} className="hover:text-pink-500">{t('refresh')}</button>
           </div>
           {setup?.hardware?.reason && <p className="px-1 text-[10px] text-zinc-400">{setup.hardware.reason}</p>}
           {error && <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs leading-5 text-red-700 dark:text-red-200">{error}</div>}
@@ -1178,10 +1157,16 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
           onClose={() => setNewPlaylistOpen(false)}
           onCreate={(name, description) => void onCreatePlaylist(name, description).then(playlist => { if (playlist) choosePlaylist(playlist.id); })}
         />
-        <label className="mb-2 flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-300" title={t('generateForeverHint')}>
-          <input type="checkbox" checked={forever} onChange={event => setForever(event.target.checked)} className="accent-pink-500" />
-          {t('generateForever')}
-        </label>
+        {/* songs without end are switched on by a deliberate slide, never by a stray click */}
+        <div className="mb-2">
+          <SlideToEnable
+            on={forever}
+            onChange={setForever}
+            offLabel={t('generateForeverSlide')}
+            stopLabel={t('generateForeverStop')}
+            title={t('generateForeverHint')}
+          />
+        </div>
         <button
           type="button"
           onClick={submit}
