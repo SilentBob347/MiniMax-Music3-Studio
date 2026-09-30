@@ -97,6 +97,10 @@ export const STRINGS = {
       [
         "15-winamp",
         "The whole window as Winamp 2: equalizer, playlist and MilkDrop, skinned."
+      ],
+      [
+        "16-covers",
+        "A cover for every track: Commons photos for the style, patterns, generation or your own file."
       ]
     ],
     "label": "English",
@@ -188,6 +192,18 @@ export const STRINGS = {
       [
         "A proxy for the whole studio",
         "HTTP, HTTPS, SOCKS5 or SOCKS4, with a login: model downloads, Hugging Face, OpenRouter and updates go through it."
+      ],
+      [
+        "A cover for every track",
+        "A track without one wears a free CC0 photograph from Wikimedia Commons that fits its style, a pattern in one of 21 styles, or a cover generated through OpenRouter. It stays the same, a stem wears its song’s, and it is written into the MP3."
+      ],
+      [
+        "Music videos",
+        "A visualiser video of any track in 16:9, 9:16 or 1:1 with karaoke lyrics and effects. Its background and centre picture come from the same window as covers: Commons photos and clips, the pattern, generation or your own file - no keys."
+      ],
+      [
+        "Activity and a tidy library",
+        "A log of everything a connected agent changed; likes kept with the song, lists sorted by date, title or length, and stems folded under their song."
       ]
     ],
     "modelsTitle": "Models",
@@ -375,6 +391,10 @@ export const STRINGS = {
       [
         "15-winamp",
         "Всё окно как Winamp 2: эквалайзер, плейлист и MilkDrop в скине."
+      ],
+      [
+        "16-covers",
+        "Обложка для любого трека: фото с Commons под стиль, узоры, генерация или свой файл."
       ]
     ],
     "label": "Русский",
@@ -466,6 +486,18 @@ export const STRINGS = {
       [
         "Прокси на всю студию",
         "HTTP, HTTPS, SOCKS5 или SOCKS4, с логином: через него идут загрузки моделей, Hugging Face, OpenRouter и обновления."
+      ],
+      [
+        "Обложка у каждого трека",
+        "Трек без своей обложки получает бесплатное фото CC0 с Wikimedia Commons под свой стиль, узор в одном из 21 стиля или обложку, сгенерированную через OpenRouter. Она не меняется, стемы носят обложку песни, и она записывается в MP3."
+      ],
+      [
+        "Музыкальные клипы",
+        "Видео-визуализация любого трека в 16:9, 9:16 или 1:1 с караоке и эффектами. Фон и картинка в центре выбираются в том же окне, что и обложка: фото и ролики с Commons, узор, генерация или свой файл - без ключей."
+      ],
+      [
+        "Журнал и порядок в библиотеке",
+        "Лог всего, что изменил подключённый агент; лайки хранятся в песне, списки сортируются по дате, названию или длине, стемы свёрнуты под своей песней."
       ]
     ],
     "modelsTitle": "Модели",
@@ -653,6 +685,10 @@ export const STRINGS = {
       [
         "15-winamp",
         "整个窗口化身 Winamp 2：均衡器、播放列表和 MilkDrop，带皮肤。"
+      ],
+      [
+        "16-covers",
+        "为每首曲目选封面：符合风格的 Commons 照片、图案、生成或自己的文件。"
       ]
     ],
     "label": "中文",
@@ -744,6 +780,18 @@ export const STRINGS = {
       [
         "整个工作室的代理",
         "HTTP、HTTPS、SOCKS5 或 SOCKS4，支持登录：模型下载、Hugging Face、OpenRouter 和更新都经由它。"
+      ],
+      [
+        "每首曲目都有封面",
+        "没有封面的曲目会得到符合其风格的 Wikimedia Commons 免费 CC0 照片、21 种样式之一的图案，或通过 OpenRouter 生成的封面。封面保持不变，分轨沿用原曲封面，并写入 MP3。"
+      ],
+      [
+        "音乐视频",
+        "任意曲目的可视化视频，16:9、9:16 或 1:1，带卡拉 OK 歌词和特效。背景和中间图片与封面用同一个窗口选择：Commons 照片和视频、图案、生成或自己的文件，无需密钥。"
+      ],
+      [
+        "动态与整洁的曲库",
+        "记录已连接代理所做的一切更改；喜欢随歌曲保存，列表可按日期、标题或时长排序，分轨折叠在原曲之下。"
       ]
     ],
     "modelsTitle": "模型",
@@ -931,6 +979,10 @@ export const STRINGS = {
       [
         "15-winamp",
         "ウィンドウ全体が Winamp 2 に：イコライザー、プレイリスト、MilkDrop をスキン付きで。"
+      ],
+      [
+        "16-covers",
+        "どの曲にもジャケット：スタイルに合う Commons の写真、模様、生成、手持ちのファイル。"
       ]
     ],
     "label": "日本語",
@@ -1022,6 +1074,18 @@ export const STRINGS = {
       [
         "スタジオ全体のプロキシ",
         "HTTP、HTTPS、SOCKS5、SOCKS4、ログイン対応。モデルのダウンロード、Hugging Face、OpenRouter、更新がすべて経由します。"
+      ],
+      [
+        "すべての曲にジャケット",
+        "ジャケットのない曲には、スタイルに合う Wikimedia Commons の無料 CC0 写真、21 種類のスタイルの模様、または OpenRouter で生成したジャケットが付きます。変わらず、ステムは元の曲のものを使い、MP3 にも書き込まれます。"
+      ],
+      [
+        "ミュージックビデオ",
+        "任意の曲のビジュアライザー動画を 16:9、9:16、1:1 で、カラオケ歌詞とエフェクト付きで。背景と中央の画像はジャケットと同じウィンドウで選べます：Commons の写真と動画、模様、生成、手持ちのファイル。キーは不要です。"
+      ],
+      [
+        "アクティビティと整ったライブラリ",
+        "接続中のエージェントが変更したことをすべて記録。いいねは曲と一緒に保存、一覧は日付・タイトル・長さで並べ替え、ステムは元の曲の下にまとまります。"
       ]
     ],
     "modelsTitle": "モデル",
@@ -1209,6 +1273,10 @@ export const STRINGS = {
       [
         "15-winamp",
         "창 전체가 Winamp 2로: 스킨을 입힌 이퀄라이저, 재생 목록, MilkDrop."
+      ],
+      [
+        "16-covers",
+        "모든 트랙에 커버: 스타일에 맞는 Commons 사진, 무늬, 생성 또는 내 파일."
       ]
     ],
     "label": "한국어",
@@ -1300,6 +1368,18 @@ export const STRINGS = {
       [
         "스튜디오 전체 프록시",
         "HTTP, HTTPS, SOCKS5, SOCKS4, 로그인 지원: 모델 다운로드, Hugging Face, OpenRouter, 업데이트가 모두 이를 거칩니다."
+      ],
+      [
+        "모든 트랙에 커버",
+        "커버가 없는 트랙은 스타일에 맞는 Wikimedia Commons의 무료 CC0 사진, 21가지 스타일의 무늬, 또는 OpenRouter로 생성한 커버를 받습니다. 바뀌지 않고, 스템은 원곡의 커버를 쓰며, MP3에도 기록됩니다."
+      ],
+      [
+        "뮤직비디오",
+        "어떤 트랙이든 16:9, 9:16, 1:1 비주얼라이저 영상으로, 가라오케 가사와 효과까지. 배경과 가운데 그림은 커버와 같은 창에서 고릅니다: Commons 사진과 영상, 무늬, 생성 또는 내 파일, 키 없이."
+      ],
+      [
+        "활동 기록과 정돈된 라이브러리",
+        "연결된 에이전트가 바꾼 모든 것을 기록합니다. 좋아요는 곡과 함께 저장되고, 목록은 날짜·제목·길이로 정렬되며, 스템은 원곡 아래에 접힙니다."
       ]
     ],
     "modelsTitle": "모델",
