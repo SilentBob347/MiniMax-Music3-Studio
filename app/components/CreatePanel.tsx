@@ -41,6 +41,9 @@ interface CreatePanelProps {
   initialData?: { song: Song; timestamp: number } | null;
   playlists: Playlist[];
   onCreatePlaylist: (name: string, description: string) => Promise<Playlist | null>;
+  /** The playlist new songs go into, which the list beside the form shows; empty for none. */
+  playlistId: string;
+  onChoosePlaylist: (id: string) => void;
 }
 
 /** The select entry that opens the new-playlist dialog instead of choosing. */
@@ -245,7 +248,7 @@ const Pane: React.FC<{
 
 const NO_ACTIVITY: ActivityEntry[] = [];
 
-export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerating, activeJobCount = 0, initialData, playlists, onCreatePlaylist }) => {
+export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerating, activeJobCount = 0, initialData, playlists, onCreatePlaylist, playlistId, onChoosePlaylist }) => {
   const { t } = useI18n();
 
   const [name, setName] = useState('');
@@ -619,16 +622,8 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
     }
   };
 
-  // The playlist new songs go into, kept between sessions: the project the
-  // user is working on, so a day's takes do not mix with the others.
-  const [playlistId, setPlaylistId] = useState(() => {
-    try { return window.localStorage.getItem('studio.createPlaylist') ?? ''; } catch { return ''; }
-  });
   const [newPlaylistOpen, setNewPlaylistOpen] = useState(false);
-  const choosePlaylist = (id: string) => {
-    setPlaylistId(id);
-    try { window.localStorage.setItem('studio.createPlaylist', id); } catch { /* kept until a reload */ }
-  };
+  const choosePlaylist = onChoosePlaylist;
   // a playlist deleted elsewhere is no longer offered or sent
   const chosenPlaylist = playlists.some(entry => entry.id === playlistId) ? playlistId : '';
 
