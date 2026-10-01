@@ -4,7 +4,8 @@
 //! with its track, a note struck again before it was released pairs its offs
 //! in order, chunks of other kinds are passed over, and a RIFF 'RMID' wrapper
 //! is opened. A file cut short, a data byte with no event to belong to, and a
-//! file timed in SMPTE frames are refused with the reason.
+//! file timed in SMPTE frames are refused with the reason. The service writes
+//! no MIDI itself; the writer here makes the files the tests read back.
 
 use std::collections::BTreeMap;
 
@@ -13,8 +14,16 @@ pub const DRUM_CHANNEL: u8 = 9;
 /// Microseconds per quarter note until a file sets a tempo: 120 BPM.
 pub const DEFAULT_TEMPO: u32 = 500_000;
 
+/// Ticks per quarter note in a file written here: a 1/32 note is 60 ticks.
+#[cfg(test)]
+pub const DIVISION: u32 = 480;
+
+#[cfg(test)]
+pub const NAME: u8 = 0x03;
 const END: u8 = 0x2F;
 const TEMPO: u8 = 0x51;
+#[cfg(test)]
+const METER: u8 = 0x58;
 
 fn data_bytes(kind: u8) -> usize {
     match kind {
@@ -220,6 +229,104 @@ pub fn read(data: &[u8]) -> Result<Song, String> {
     Ok(song)
 }
 
+/// A variable-length quantity, the way delta times and meta lengths are written.
+#[cfg(test)]
+pub fn number(value: u64) -> Result<Vec<u8>, String> {
+    if value > 0x0FFF_FFFF {
+        return Err(format!("{value} does not fit a MIDI variable-length number"));
+    }
+    let mut value = value;
+    let mut out = vec![(value & 0x7F) as u8];
+    value >>= 7;
+    while value > 0 {
+        out.push(((value & 0x7F) as u8) | 0x80);
+        value >>= 7;
+    }
+    out.reverse();
+    Ok(out)
+}
+
+#[cfg(test)]
+pub fn meta(kind: u8, payload: &[u8]) -> Vec<u8> {
+    let mut out = vec![0xFF, kind];
+    out.extend(number(payload.len() as u64).expect("a meta event this module writes fits"));
+    out.extend_from_slice(payload);
+    out
+}
+
+#[cfg(test)]
+pub fn tempo(microseconds: u32) -> Vec<u8> {
+    meta(TEMPO, &microseconds.to_be_bytes()[1..])
+}
+
+/// A time signature, with the metronome at every quarter and eight 32nds to a quarter.
+#[cfg(test)]
+pub fn meter(numerator: u32, denominator: u32) -> Vec<u8> {
+    let power = 31 - denominator.max(1).leading_zeros();
+    meta(METER, &[numerator as u8, power as u8, 24, 8])
+}
+
+#[cfg(test)]
+pub fn text(kind: u8, value: &str) -> Vec<u8> {
+    meta(kind, value.as_bytes())
+}
+
+#[cfg(test)]
+pub fn program(channel: u8, value: u8) -> Vec<u8> {
+    vec![0xC0 | channel, value]
+}
+
+#[cfg(test)]
+pub fn note_on(channel: u8, pitch: u8, velocity: u8) -> Vec<u8> {
+    vec![0x90 | channel, pitch, velocity]
+}
+
+#[cfg(test)]
+pub fn note_off(channel: u8, pitch: u8) -> Vec<u8> {
+    vec![0x80 | channel, pitch, 0]
+}
+
+#[cfg(test)]
+fn rank(event: &[u8]) -> u8 {
+    if event[0] == 0xFF {
+        0
+    } else if event[0] >> 4 == 0x8 {
+        1
+    } else {
+        2
+    }
+}
+
+/// A format-1 file from tracks of `(tick, event)`. At one tick meta events
+/// come first and note-offs before the rest, so a note that ends where the
+/// same pitch starts again is not cut short by a player pairing by pitch;
+/// every track runs to `end`, so closing bars of rest stay in the file.
+#[cfg(test)]
+pub fn write(tracks: &[Vec<(u64, Vec<u8>)>], division: u32, end: u64) -> Result<Vec<u8>, String> {
+    let mut out = b"MThd".to_vec();
+    out.extend(6u32.to_be_bytes());
+    out.extend(1u16.to_be_bytes());
+    out.extend((tracks.len() as u16).to_be_bytes());
+    out.extend((division as u16).to_be_bytes());
+    for events in tracks {
+        let mut ordered: Vec<(usize, &(u64, Vec<u8>))> = events.iter().enumerate().collect();
+        ordered.sort_by_key(|(position, (tick, event))| (*tick, rank(event), *position));
+        let mut body = Vec::new();
+        let mut last = 0u64;
+        for (_, (tick, event)) in ordered {
+            body.extend(number(tick - last)?);
+            body.extend_from_slice(event);
+            last = *tick;
+        }
+        body.extend(number(end.saturating_sub(last))?);
+        body.extend(meta(END, b""));
+        out.extend(b"MTrk");
+        out.extend((body.len() as u32).to_be_bytes());
+        out.extend(body);
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,5 +352,19 @@ mod tests {
         let mut smpte = b"MThd".to_vec();
         smpte.extend([0, 0, 0, 6, 0, 1, 0, 1, 0xE7, 0x28]);
         assert!(read(&smpte).unwrap_err().contains("SMPTE"));
+    }
+
+    #[test]
+    fn a_written_file_reads_back_with_its_notes_and_tempo() {
+        let conductor = vec![(0, text(NAME, "MiniMax song")), (0, tempo(400_000)), (0, meter(3, 4)), (960, tempo(500_000))];
+        let voice = vec![(0, text(NAME, "Lead")), (0, program(0, 80)), (0, note_on(0, 60, 100)), (480, note_off(0, 60)), (480, note_on(0, 60, 90)), (960, note_off(0, 60))];
+        let data = write(&[conductor, voice], DIVISION, 1440).unwrap();
+        let song = read(&data).unwrap();
+        assert_eq!((song.division, song.tracks.len()), (480, 2));
+        assert_eq!(song.tempos, vec![(0, 400_000), (960, 500_000)]);
+        assert_eq!(song.tracks[1].programs.get(&0), Some(&80));
+        let notes = &song.tracks[1].notes;
+        assert_eq!(notes.len(), 2, "a note ending where the same pitch starts again is not cut short");
+        assert_eq!((notes[0].start, notes[0].end, notes[0].velocity, notes[1].start, notes[1].end, notes[1].velocity), (0, 480, 100, 480, 960, 90));
     }
 }

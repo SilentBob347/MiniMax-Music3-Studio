@@ -3,6 +3,17 @@
 What changed, newest first. Dates are release dates; the studio is versioned by its
 Windows build.
 
+## Unreleased
+
+### Added
+
+- **The MIDI editor.** A piano roll with tracks, instruments and drums (signal, MIT, played
+  through the A320U SoundFont) opens in two places: in Studio tools on a new song, played in
+  from a MIDI keyboard or the computer's keys, recorded or drawn; and on a track's MIDI, Edit
+  beside Save, kept on the track in place of the transcription while the track's audio stays
+  as it is. A new song is saved to the library as a track, its audio rendered through the
+  same SoundFont and its MIDI kept beside it.
+
 ## 2026-09-30 — 3.3.0
 
 ### Added
