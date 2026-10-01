@@ -151,7 +151,13 @@ Code, save [docs/mcp-skill.md](docs/mcp-skill.md) as `~/.claude/skills/minimax-m
 - **Likes, sorting and stems in order** — a like is kept with the song for every window and
   agent, every list sorts by date, title or length, and a song's stems fold under it.
 
+## Compose and edit MIDI
+
+The embedded Signal editor has multiple tracks, instruments, drums, MIDI keyboard recording, tempo changes, editable chord symbols and section markers. Save a new composition as MIDI and rendered audio in the library, or update an existing track’s MIDI. SoundFonts are bundled locally; the editor sends no analytics.
+
 ## Screenshots
+
+![The MIDI editor: chords, sections and notes](docs/screenshots/en-17-midi-editor.png)
 
 | | |
 |---|---|
@@ -541,6 +547,8 @@ its source, like the studio's, is public.
 What changed and when is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Acknowledgements
+
+- [ryohey](https://github.com/ryohey) for [Signal](https://github.com/ryohey/signal) (MIT), built from [the studio fork](https://github.com/timoncool/signal/tree/studio), and Milton Paredes for the bundled A320U SoundFonts (GPL-2.0). License notices are kept in [licenses](licenses).
 
 - [MiniMax](https://huggingface.co/MiniMaxAI) for MiniMax Music3.
 - [Serveurperso](https://github.com/ServeurpersoCom) for minimaxmusic.cpp.

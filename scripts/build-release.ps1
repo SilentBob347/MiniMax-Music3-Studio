@@ -101,6 +101,7 @@ try {
     # here, so they are checked directly.
     $ErrorActionPreference = 'Continue'
     & (Join-Path $PSScriptRoot 'build-minimax-runtime.ps1') -OutputDirectory $engineResourceRoot -RuntimeBackend $RuntimeBackend -CudaArchitecture universal -Cuda12Root $Cuda12Root
+    if (-not $?) { throw "The nested build script failed; release packaging stopped." }
     if ($LASTEXITCODE -ne 0) { throw "the engine runtime build failed with exit code $LASTEXITCODE" }
     # The VST host follows the trainer's HOT-Step commit; rebuilt only when that moves.
     $trainSource = Get-Content -Raw (Join-Path $repoRoot 'engines\music-train-source.json') | ConvertFrom-Json
@@ -108,6 +109,7 @@ try {
     $vstStamp = if (Test-Path $vstStampPath) { Get-Content -Raw $vstStampPath | ConvertFrom-Json } else { $null }
     if (-not ($vstStamp -and $vstStamp.commit -eq $trainSource.commit -and (Test-Path (Join-Path $vstResourceRoot 'vst-host.exe')))) {
         & (Join-Path $PSScriptRoot 'build-vst-host.ps1') -OutputDirectory $vstResourceRoot
+        if (-not $?) { throw "The nested build script failed; release packaging stopped." }
         if ($LASTEXITCODE -ne 0) { throw "the VST host build failed with exit code $LASTEXITCODE" }
     }
     # The engine is built first on purpose: one of these tests reads the staged
@@ -149,7 +151,7 @@ try {
     # Program Files, where the studio cannot write - so an MSI installation put
     # its models in the user profile on C: no matter which drive was chosen for
     # the program itself. The updater never used it either.
-    Get-ChildItem -Recurse -File $bundleRoot -Include '*.exe','*.sig' |
+    Get-ChildItem -Recurse -File $bundleRoot -Include "*$Version*-setup.exe","*$Version*-setup.exe.sig" |
         Copy-Item -Destination $releaseDir -Force
 
     $portableRoot = Join-Path $releaseDir "MiniMax-Music3-Studio-$Version-portable"
@@ -209,6 +211,10 @@ try {
         ($latest | ConvertTo-Json -Depth 8),
         (New-Object System.Text.UTF8Encoding($false))
     )
+}
+catch {
+    Write-Error $_ -ErrorAction Continue
+    exit 1
 }
 finally {
     Remove-Item -LiteralPath $releaseConfigPath -Force -ErrorAction SilentlyContinue

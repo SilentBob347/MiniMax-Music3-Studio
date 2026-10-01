@@ -3,9 +3,11 @@
 What changed, newest first. Dates are release dates; the studio is versioned by its
 Windows build.
 
-## Unreleased
+## 2026-10-01 — 3.4.0
 
 ### Added
+
+- Editable chord and section lanes above the MIDI piano roll; chord timing and section markers survive saving and reopening.
 
 - **The MIDI editor.** A piano roll with tracks, instruments and drums (signal, MIT, played
   through the A320U SoundFont) opens in two places: in Studio tools on a new song, played in
