@@ -32,6 +32,8 @@ mod resources;
 mod chunked;
 mod separation;
 mod midi;
+mod midi_edit;
+mod smf;
 mod sizes;
 pub mod net;
 mod saving;
@@ -791,7 +793,7 @@ pub async fn serve() -> anyhow::Result<()> {
         .route("/v1/midi/remove", post(remove_midi_model))
         .route("/v1/midi/cancel", post(cancel_midi))
         .route("/v1/midi/transcribe", post(start_midi))
-        .route("/v1/library/songs/{id}/midi", get(read_song_midi).delete(delete_song_midi))
+        .route("/v1/library/songs/{id}/midi", get(read_song_midi).put(write_song_midi).delete(delete_song_midi))
         .route("/v1/library/songs/{id}/midi/file", get(song_midi_file))
         .route("/v1/training/datasets/{id}/items/{item}/files", get(dataset_song_files))
         .route("/v1/training/prepare/cancel", post(prepare::cancel))
@@ -2031,17 +2033,18 @@ async fn read_training(State(state): State<AppState>) -> Json<Value> {
             value
         })
         .collect();
-    let pack = training.pack_status();
-    let training_download = training.downloader().active_for(training::SCOPE).await;
+    let pack = training_pack_files(&state);
+    let training_download = training_pack_download(&state).await;
     let listen_download = training.downloader().active_for(training::LISTEN_SCOPE).await.filter(|active| !active.done);
     Json(serde_json::json!({
         "pack": pack,
-        "pack_ready": training.pack_ready(),
+        "pack_ready": training.pack_ready() && !trainer_cublas_missing(&state),
         "recipe_defaults": training::Recipe::default(),
         "recipe_fields": music_engine::mm_train::recipe_fields(),
         "min_vram_gb": music_engine::mm_train::MIN_VRAM_GB,
-        // the trainer computes on CUDA only
-        "card_trains": cuda_build::current().is_some(),
+        "card_trains": trainer_card_refusal().is_none(),
+        "card_needs": trainer_card_needs(),
+        "trainer_driver": cuda_build::CUDA13_DRIVER,
         "item_style": "caption",
         "download": training_download,
         "listen": {
@@ -2077,10 +2080,11 @@ fn pack_runtime(mut files: Vec<Value>, ready: bool, active_download: Option<down
 /// The training pack on the models page, with what the reference there says:
 /// the video memory a run needs and whether this card trains at all.
 async fn training_pack_runtime(State(state): State<AppState>) -> Json<Value> {
-    let training = &state.training;
-    let mut body = pack_runtime(training.pack_status(), training.pack_ready(), training.downloader().active_for(training::SCOPE).await);
+    let ready = state.training.pack_ready() && !trainer_cublas_missing(&state);
+    let mut body = pack_runtime(training_pack_files(&state), ready, training_pack_download(&state).await);
     body["min_vram_gb"] = music_engine::mm_train::MIN_VRAM_GB.into();
-    body["card_trains"] = cuda_build::current().is_some().into();
+    body["card_trains"] = trainer_card_refusal().is_none().into();
+    body["card_needs"] = trainer_card_needs().into();
     Json(body)
 }
 
@@ -2118,13 +2122,17 @@ async fn midi_runtime(State(state): State<AppState>) -> Json<Value> {
 
 async fn install_training_pack(State(state): State<AppState>) -> Result<Json<Value>, (StatusCode, Json<ApiError>)> {
     // gigabytes of training files are no use to a machine that cannot train
-    if cuda_build::current().is_none() {
-        return Err(api_error(StatusCode::CONFLICT, TRAINING_NEEDS_CUDA.into()));
+    if let Some(refusal) = trainer_card_refusal() {
+        return Err(api_error(StatusCode::CONFLICT, refusal));
     }
     let background = state.clone();
     tokio::spawn(async move {
         if let Err(error) = background.training.install_pack().await {
             eprintln!("[ERROR] training pack: {error:#}");
+            return;
+        }
+        if let Err(error) = background.engine_runtime.install_missing(cuda_build::CudaBuild::Cuda13).await {
+            eprintln!("[ERROR] cuBLAS for the trainer: {error:#}");
         }
     });
     Ok(Json(serde_json::json!({ "started": true })))
@@ -2151,6 +2159,7 @@ async fn install_listen_pack(State(state): State<AppState>) -> Json<Value> {
 
 async fn cancel_training_pack(State(state): State<AppState>) -> Json<Value> {
     state.training.downloader().cancel();
+    state.engine_runtime.downloader().cancel();
     Json(serde_json::json!({ "cancelled": true }))
 }
 
@@ -2367,8 +2376,10 @@ async fn start_training(State(state): State<AppState>, Json(input): Json<StartTr
         .map_err(|error| api_error(StatusCode::CONFLICT, error))
 }
 
-/// A run of `dataset`, refused while a song renders.
+/// A run of `dataset`, refused while a song renders or where the trainer
+/// could not compute on the card.
 async fn start_training_run(state: &AppState, dataset: &str, name: &str, recipe: training::Recipe) -> Result<training::Run, String> {
+    trainer_ready(state)?;
     no_song_rendering(state).await?;
     state
         .training
@@ -2418,13 +2429,10 @@ async fn no_song_rendering(state: &AppState) -> Result<(), String> {
 }
 
 /// What keeps the user from starting a training run or training one further:
-/// a machine with no card CUDA runs on - the trainer carries no other
-/// backend, and on the processor a run would take days - songs being
-/// prepared, or a song being made.
+/// a machine the trainer does not run on, songs being prepared, or a song
+/// being made.
 async fn card_free_for_training(state: &AppState) -> Result<(), String> {
-    if cuda_build::current().is_none() {
-        return Err(TRAINING_NEEDS_CUDA.into());
-    }
+    trainer_ready(state)?;
     let preparing = state.prepare.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_ref().is_some_and(|job| !job.finished);
     if preparing {
         return Err("songs are being prepared; train once that is done".into());
@@ -2432,8 +2440,81 @@ async fn card_free_for_training(state: &AppState) -> Result<(), String> {
     no_song_rendering(state).await
 }
 
+/// Why the trainer does not run on this machine's card, none when it does. It
+/// is a CUDA 13 build and computes on the card only: on the processor one run
+/// would take days.
+fn trainer_card_refusal() -> Option<String> {
+    match cuda_build::current() {
+        Some(cuda_build::CudaBuild::Cuda13) => None,
+        Some(cuda_build::CudaBuild::Cuda12) => Some(format!(
+            "training needs NVIDIA driver {} or newer: the trainer is a CUDA 13 build, and this card or its driver runs CUDA 12 only",
+            cuda_build::CUDA13_DRIVER
+        )),
+        None => Some(TRAINING_NEEDS_CUDA.into()),
+    }
+}
+
+/// What the card lacks for the trainer, as the training page names it:
+/// "nvidia" on a machine with no CUDA card, "driver" where the card or its
+/// driver runs CUDA 12 only.
+fn trainer_card_needs() -> Option<&'static str> {
+    match cuda_build::current() {
+        Some(cuda_build::CudaBuild::Cuda13) => None,
+        Some(cuda_build::CudaBuild::Cuda12) => Some("driver"),
+        None => Some("nvidia"),
+    }
+}
+
+/// Whether the cuBLAS the trainer's CUDA backend loads is missing. It comes
+/// from beside the engine, which fetches it only for a CUDA 13 run of its own.
+fn trainer_cublas_missing(state: &AppState) -> bool {
+    !state.engine_runtime.missing(cuda_build::CudaBuild::Cuda13).is_empty()
+}
+
+/// Refuses a run the trainer could not compute on the card.
+fn trainer_ready(state: &AppState) -> Result<(), String> {
+    if let Some(refusal) = trainer_card_refusal() {
+        return Err(refusal);
+    }
+    if trainer_cublas_missing(state) {
+        return Err(TRAINER_CUBLAS_MISSING.into());
+    }
+    Ok(())
+}
+
+/// The training pack's files as the training page lists them: the trainer's
+/// own and the cuBLAS its CUDA backend loads.
+fn training_pack_files(state: &AppState) -> Vec<Value> {
+    let mut pack = state.training.pack_status();
+    if trainer_card_refusal().is_none() {
+        let cublas = engine_runtime::cublas_asset(cuda_build::CudaBuild::Cuda13);
+        pack.push(serde_json::json!({
+            "id": cublas.id,
+            "label": cublas.label,
+            "bytes": cublas.bytes,
+            "installed": !trainer_cublas_missing(state),
+        }));
+    }
+    pack
+}
+
+/// The training pack's download in progress: its own, or the trainer's
+/// cuBLAS, which comes through the engine's downloader.
+async fn training_pack_download(state: &AppState) -> Option<downloads::DownloadProgress> {
+    let cublas_download = state.engine_runtime.downloader().active_for("engine").await;
+    match state.training.downloader().active_for(training::SCOPE).await {
+        Some(active) if !active.done => Some(active),
+        other => match cublas_download {
+            Some(active) if !active.done || active.error.is_some() => Some(active),
+            _ => other,
+        },
+    }
+}
+
 /// Why this machine does not train.
 const TRAINING_NEEDS_CUDA: &str = "training runs on an NVIDIA card with CUDA only, and this machine has none";
+/// Why a run cannot start before the training pack is complete.
+const TRAINER_CUBLAS_MISSING: &str = "the training files are not downloaded yet: the trainer needs NVIDIA cuBLAS 13; download the training pack";
 
 async fn card_free_of_training(state: &AppState, what: &str) -> Result<(), (StatusCode, Json<ApiError>)> {
     if state.training.active_run().await.is_some() {
@@ -6083,6 +6164,38 @@ async fn song_midi_file(State(state): State<AppState>, Path(id): Path<String>) -
         .header(header::CONTENT_DISPOSITION, disposition)
         .body(axum::body::Body::from(bytes))
         .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?)
+}
+
+#[derive(Deserialize)]
+struct MidiUpload {
+    data: String,
+}
+
+/// A .mid from the MIDI editor kept as a library track's MIDI: the file as it came, and the notes the player reads from it.
+async fn write_song_midi(State(state): State<AppState>, Path(id): Path<String>, Json(body): Json<MidiUpload>) -> Result<Json<Value>, (StatusCode, Json<ApiError>)> {
+    use base64::Engine as _;
+    if state.library.get_song(&id).map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?.is_none() {
+        return Err(api_error(StatusCode::NOT_FOUND, format!("no library track {id}")));
+    }
+    let data = base64::engine::general_purpose::STANDARD.decode(body.data.trim()).map_err(|_| api_error(StatusCode::BAD_REQUEST, "'data' is not base64".into()))?;
+    if data.len() > 8 * 1024 * 1024 {
+        return Err(api_error(StatusCode::PAYLOAD_TOO_LARGE, "that file is larger than 8 MB, far more than the MIDI of any song".into()));
+    }
+    let notes = midi_edit::read(&data).map_err(|error| api_error(StatusCode::BAD_REQUEST, format!("this file could not be read as MIDI: {error}")))?;
+    let file = midi_path(&state, &id);
+    let made_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|since| since.as_secs().to_string()).unwrap_or_default();
+    let sidecar = midi::Sidecar { size: "edited".into(), made_at, instruments: midi_edit::instruments(&notes), notes };
+    let sidecar_bytes = serde_json::to_vec(&sidecar).map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+    tokio::fs::write(&file, data).await.map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("write {}: {error}", file.display())))?;
+    tokio::fs::write(midi_sidecar(&file), sidecar_bytes).await.map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("write {}: {error}", midi_sidecar(&file).display())))?;
+    Ok(Json(serde_json::json!({
+        "song_id": id,
+        "file": plain_path(&file),
+        "size": sidecar.size,
+        "made_at": sidecar.made_at,
+        "instruments": sidecar.instruments,
+        "notes": sidecar.notes,
+    })))
 }
 
 async fn delete_song_midi(State(state): State<AppState>, Path(id): Path<String>) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
