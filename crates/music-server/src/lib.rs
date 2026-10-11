@@ -7815,6 +7815,16 @@ fn initial_configuration() -> StudioConfiguration {
 fn sanitize_persisted_configuration(mut configuration: StudioConfiguration) -> StudioConfiguration {
     let declared = capability_engines(None, false);
     for selection in &mut configuration.selections {
+        // Songs have one local engine and no cloud model to fall back on: an
+        // engine id from an older build, or a cloud choice saved without a
+        // model, would stop every song, so both go back to the studio's engine.
+        if selection.capability == Capability::MusicGeneration {
+            if selection.mode == ExecutionMode::Local || selection.cloud_model.as_deref().is_none_or(|model| model.trim().is_empty()) {
+                selection.mode = ExecutionMode::Local;
+                selection.local_engine = Some(PRIMARY_MUSIC_ENGINE_ID.to_owned());
+            }
+            continue;
+        }
         let engine_serves_capability = selection.local_engine.as_deref().is_some_and(|engine_id| {
             declared.iter().any(|engine| {
                 engine.id == engine_id
