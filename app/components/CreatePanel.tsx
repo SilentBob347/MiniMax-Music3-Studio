@@ -633,7 +633,11 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
   useEffect(() => {
     const stop = () => setForever(false);
     window.addEventListener('mm3:cancel-all', stop);
-    return () => window.removeEventListener('mm3:cancel-all', stop);
+    window.addEventListener('mm3:generation-failed', stop);
+    return () => {
+      window.removeEventListener('mm3:cancel-all', stop);
+      window.removeEventListener('mm3:generation-failed', stop);
+    };
   }, []);
   const foreverRequest = useRef<Music3Request | null>(null);
   useEffect(() => {
