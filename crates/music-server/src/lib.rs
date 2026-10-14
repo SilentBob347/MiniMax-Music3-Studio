@@ -7016,13 +7016,15 @@ fn engine_failure_reason() -> Option<String> {
 /// Why the engine gave this job up: running out of memory, else its own last
 /// FATAL line after the job's start.
 fn job_failure_reason(state: &AppState, job_id: &str) -> Option<String> {
-    engine_failure_reason().or_else(|| last_fatal(&state.engine_log.lines()?, job_id))
+    engine_failure_reason().or_else(|| first_fatal(&state.engine_log.lines()?, job_id))
 }
 
-fn last_fatal(lines: &[String], job_id: &str) -> Option<String> {
+/// The first FATAL line after the job's own start, without the stage tag: the
+/// lines after it are its consequences.
+fn first_fatal(lines: &[String], job_id: &str) -> Option<String> {
     let start = format!("Job {job_id}");
     let from = lines.iter().rposition(|line| line.contains(&start))?;
-    lines[from..].iter().rev().find_map(|line| line.split_once("FATAL:").map(|(_, why)| why.trim().to_string())).filter(|why| !why.is_empty())
+    lines[from..].iter().find_map(|line| line.split_once("FATAL:").map(|(_, why)| why.trim().to_string())).filter(|why| !why.is_empty())
 }
 
 /// Whether a lowercased log says the card ran out of room.
