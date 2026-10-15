@@ -244,7 +244,7 @@ fn proxy_for(settings: &ProxySettings, system: &Matcher, url: &reqwest::Url) -> 
 }
 
 fn user_agent() -> String {
-    concat!("MiniMax-Music3-Studio/", env!("CARGO_PKG_VERSION")).to_string()
+    format!("MiniMax-Music3-Studio/{}", crate::studio_version())
 }
 
 /// A client builder that goes out as the settings say, with the studio's
