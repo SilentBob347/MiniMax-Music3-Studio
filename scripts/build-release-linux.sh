@@ -1,6 +1,6 @@
 #!/bin/bash
 # Builds MiniMax Music3 Studio for Linux x86-64: a .deb and an AppImage with
-# the pinned minimaxmusic.cpp engine on Vulkan bundled. Model weights are
+# the pinned minimaxmusic.cpp engine on Vulkan and the audio-to-MIDI transcriber bundled. Model weights are
 # downloaded in the app.
 set -euo pipefail
 
@@ -11,6 +11,13 @@ commit="$(sed -n 's/.*"commit": "\(.*\)".*/\1/p' "$root/engines/minimaxmusic-cpp
 if [ ! -x "$engine/mm-server" ] || ! grep -q "$commit" "$engine/runtime.json" 2>/dev/null; then
     rm -rf "$engine"
     "$root/scripts/build-minimax-runtime-linux.sh" "$engine"
+fi
+
+midi="$root/desktop/src-tauri/resources/music-midi"
+midi_commit="$(sed -n 's/.*"commit": "\(.*\)".*/\1/p' "$root/engines/music-midi-source.json")"
+if [ ! -x "$midi/music-midi" ] || [ "$(cat "$midi/runtime.commit" 2>/dev/null)" != "$midi_commit" ]; then
+    rm -rf "$midi"
+    "$root/scripts/build-midi-runtime-linux.sh" "$midi"
 fi
 
 cd "$root"
