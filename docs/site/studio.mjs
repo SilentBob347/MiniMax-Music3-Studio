@@ -5,7 +5,6 @@ export const STUDIO = {
   name: 'MiniMax Music3 Studio',
   repo: 'https://github.com/timoncool/MiniMax-Music3-Studio',
   site: 'https://timoncool.github.io/MiniMax-Music3-Studio/',
-  version: '3.5.5',
   installerMB: 455.28,
   updated: '2026-10-14',
   bento: [

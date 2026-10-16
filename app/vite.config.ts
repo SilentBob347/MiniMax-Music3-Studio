@@ -1,11 +1,17 @@
+import { readFileSync } from 'fs';
 import path from 'path';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 
+const appVersion: string = JSON.parse(readFileSync(path.resolve(import.meta.dirname, '../desktop/src-tauri/tauri.conf.json'), 'utf8')).version;
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
   return {
+    define: {
+      __APP_VERSION__: JSON.stringify(appVersion),
+    },
     server: {
       port: 3000,
       host: '0.0.0.0',

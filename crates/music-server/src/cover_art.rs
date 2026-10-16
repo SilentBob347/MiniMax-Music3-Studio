@@ -284,7 +284,7 @@ pub const COMMONS_PAGES: &str = "https://commons.wikimedia.org/";
 
 /// Commons asks every client to name itself and a way to reach its authors.
 pub fn commons_agent() -> String {
-    format!("MiniMax-Music3-Studio/{} (https://github.com/timoncool/MiniMax-Music3-Studio)", env!("CARGO_PKG_VERSION"))
+    format!("MiniMax-Music3-Studio/{} (https://github.com/timoncool/MiniMax-Music3-Studio)", crate::studio_version())
 }
 
 /// Commons asks for no more than a few requests at a time.
