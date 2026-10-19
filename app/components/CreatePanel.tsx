@@ -12,6 +12,7 @@ import { AdapterPicker } from './AdapterPicker';
 import { CreatePlaylistModal } from './PlaylistModals';
 import { SlideToEnable } from './SlideToEnable';
 import { usesFromSettings, type AdapterUse } from '../services/adapters';
+import { explainCliFailure } from '../services/cliFailure';
 
 /**
  * The Music3 request form.
@@ -596,7 +597,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
       // Giving up on a run is not an error to report back at the person who
       // gave up on it.
       const cancelled = reason instanceof DOMException && reason.name === 'AbortError';
-      if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
+      if (!cancelled) setError(explainCliFailure(reason instanceof Error ? reason.message : String(reason), t));
     } finally {
       assistRun.current = null;
       setAssisting(null);
@@ -625,7 +626,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
       setLyrics(body.lyrics);
     } catch (reason) {
       const cancelled = reason instanceof DOMException && reason.name === 'AbortError';
-      if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
+      if (!cancelled) setError(explainCliFailure(reason instanceof Error ? reason.message : String(reason), t));
     } finally {
       assistRun.current = null;
       setAssisting(null);
