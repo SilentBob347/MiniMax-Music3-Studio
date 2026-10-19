@@ -1567,7 +1567,7 @@ async fn assistant_runtime_remove(
     // is on disk, and the model that was chosen with it.
     let ids: Vec<String> = if request.asset_id == "managed" || request.asset_id == "cuda" || request.asset_id == "cpu" {
         let chosen = state.assistant.read().await.managed_model.clone();
-        ["llama-cuda", "llama-cuda-runtime", "llama-cuda12", "llama-cuda12-runtime", "llama-vulkan", "llama-cpu"].iter().map(|id| id.to_string()).chain(chosen).collect()
+        ["llama-cuda", "llama-cuda-runtime", "llama-cuda12", "llama-cuda12-runtime", "llama-vulkan", "llama-cpu"].iter().filter(|id| assistant_runtime::asset(id).is_some()).map(|id| id.to_string()).chain(chosen).collect()
     } else {
         vec![request.asset_id.clone()]
     };
@@ -3148,10 +3148,7 @@ async fn time_lyrics_for(state: AppState, song_id: String) {
             let path = std::path::PathBuf::from(&audio);
             match tokio::task::spawn_blocking(move || sync.parakeet_words(config.runtime, config.whisper_model.as_deref(), &path)).await {
                 Ok(result) => result,
-                Err(error) => {
-                    eprintln!("no karaoke for {song_id}: {error}");
-                    return;
-                }
+                Err(error) => Err(anyhow::anyhow!("the recogniser stopped: {error}")),
             }
         }
         lyrics_sync::AsrProvider::Whisper => {
@@ -3161,10 +3158,7 @@ async fn time_lyrics_for(state: AppState, song_id: String) {
             let lyrics = song.lyrics.clone();
             match tokio::task::spawn_blocking(move || sync.whisper_words(&config, &path, None, &lyrics)).await {
                 Ok(result) => result,
-                Err(error) => {
-                    eprintln!("no karaoke for {song_id}: {error}");
-                    return;
-                }
+                Err(error) => Err(anyhow::anyhow!("the recogniser stopped: {error}")),
             }
         }
         lyrics_sync::AsrProvider::OpenRouter => {
@@ -6652,6 +6646,9 @@ async fn transcribe_to_midi(state: &AppState, size: &'static midi::Size, audio: 
     }
     let device = midi_device(&state.engine_options.read().await.clone());
     let mut command = tokio::process::Command::new(&tool);
+    if let Some(path) = music_core::process::own_libraries_first(&tool) {
+        command.env("LD_LIBRARY_PATH", path);
+    }
     command
         .arg("--device")
         .arg(device)
