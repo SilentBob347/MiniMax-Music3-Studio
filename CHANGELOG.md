@@ -7,6 +7,7 @@ Windows build.
 
 ### Fixed
 
+- **An agent sees the window as you do.** Through the studio's MCP it now sees folded sections (open or closed) and the options of open lists, reads a field by its own label rather than by the options inside it, and a field it fills while the window is in the background saves as after your own click.
 - **LoRA preparation says which song does not fit and why.** A song longer than the model's 24576 tokens (prompt, score and audio together) passed preparation and failed at its end with "prepared manifest failed reader roundtrip"; the trainer now names the song and its sizes, and a roundtrip failure carries the reader's reason ([#110](https://github.com/timoncool/YuE2-Studio/issues/110)).
 - **Karaoke and stems on a Mac.** The Mac build downloaded the Windows ONNX Runtime and could not load it; it now takes Microsoft's macOS arm64 build, runs Parakeet and the separator on the processor, and the app may load that library (it is signed by Microsoft, not with the app). Whisper and the CUDA and DirectML parts are not offered on a Mac, where they cannot run ([YuE2-Studio #105](https://github.com/timoncool/YuE2-Studio/issues/105)).
 - **A download Hugging Face does not answer says why and what to do.** The error kept only "error sending request" and lost the cause (the name not found, a timeout, a refused connection); it now names it, and when the model comes from Hugging Face it points to Settings - Network, which can take models from the HF-Mirror instead.
