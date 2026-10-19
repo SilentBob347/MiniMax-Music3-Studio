@@ -177,6 +177,11 @@ struct CreateMusicJobRequest {
     dit_cfg: Option<f64>,
     output_format: Option<String>,
     mp3_bitrate: Option<u32>,
+    /// Seconds the studio fades the made song in and out over; none or 0 leaves it as sung.
+    #[serde(default)]
+    fade_in: Option<f32>,
+    #[serde(default)]
+    fade_out: Option<f32>,
     models: Option<Mm3ModelSelection>,
     /// Library title only. It is never sent to mm-server, which has no title
     /// field, so it must not become part of the replayable request.
@@ -7917,17 +7922,26 @@ async fn import_completed_mm_result(state: &AppState, job: &MusicJob, job_id: &s
         // the engine's float output is kept at the level it came: lossless FLAC unless MP3 was asked for
         if extension == "wav" {
             let kbps = job.generation_settings.get("mp3_bitrate").and_then(Value::as_u64).map_or(DEFAULT_MP3_KBPS, |value| value as u32);
+            let seconds = |key: &str| job.generation_settings.get(key).and_then(Value::as_f64).unwrap_or(0.0) as f32;
+            let fades = (seconds("fade_in"), seconds("fade_out"));
+            let faded = fades.0 > 0.0 || fades.1 > 0.0;
+            if faded {
+                replay["fade_in"] = Value::from(fades.0);
+                replay["fade_out"] = Value::from(fades.1);
+            }
             let target = format.clone();
             audio = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<u8>> {
-                if target == "wav32" {
+                if target == "wav32" && !faded {
                     return Ok(audio);
                 }
-                let stereo = audio_pcm::decode_stereo_bytes(audio, "wav")?;
+                let mut stereo = audio_pcm::decode_stereo_bytes(audio, "wav")?;
                 if let Some(problem) = audio_pcm::stereo_problem(&stereo) {
                     anyhow::bail!("The engine returned {problem} instead of a song, so nothing was kept. Make it again; if it repeats, the engine log has the cause.");
                 }
+                audio_post::encode::fade(&mut stereo, fades.0, fades.1);
                 match target.as_str() {
                     "mp3" => audio_post::encode::mp3(&stereo, kbps),
+                    "wav32" => audio_pcm::wav_f32_bytes(&stereo),
                     _ => audio_post::encode::flac(&stereo),
                 }
             })
@@ -8231,6 +8245,8 @@ fn engine_submission(body: &Value) -> Value {
         fields.insert("output_format".into(), Value::from("wav32"));
         fields.remove("mp3_bitrate");
         fields.remove("peak_clip");
+        fields.remove("fade_in");
+        fields.remove("fade_out");
     }
     engine
 }
@@ -8311,6 +8327,11 @@ fn mm_request_from(request: &CreateMusicJobRequest, selected_profile_id: Option<
     insert_optional(&mut body, "lm_top_k", request.lm_top_k);
     insert_optional(&mut body, "dit_cfg", request.dit_cfg);
     insert_optional(&mut body, "output_format", request.output_format.clone());
+    for (key, seconds) in [("fade_in", request.fade_in), ("fade_out", request.fade_out)] {
+        if let Some(seconds) = seconds.filter(|seconds| *seconds > 0.0) {
+            body[key] = Value::from(seconds);
+        }
+    }
     if !request.adapters.is_empty() {
         body["adapters"] = Value::Array(adapter_fields(&request.adapters)?);
     }
@@ -8587,6 +8608,16 @@ mod tests {
         assert_eq!(output_format(&serde_json::json!({ "output_format": "mp3" })), "mp3");
     }
 
+    #[test]
+    fn fades_are_studio_processing_and_never_engine_flags() {
+        let sent = engine_submission(&serde_json::json!({ "caption": "x", "fade_in": 1.0, "fade_out": 4.5 }));
+        assert!(sent.get("fade_in").is_none() && sent.get("fade_out").is_none());
+        let mut audio = audio_post::Stereo { left: vec![1.0; 48_000], right: vec![1.0; 48_000], rate: 48_000 };
+        audio_post::encode::fade(&mut audio, 0.0, 0.5);
+        assert_eq!(audio.left[23_999], 1.0);
+        assert!(audio.left[47_999] < 0.001 && (audio.left[36_000] - 0.5).abs() < 0.01);
+    }
+
     /// Every file the editor page loads has to be embedded. The WaveSurfer
     /// bundle was ignored by git, so a clean checkout built a blank editor.
     #[test]
@@ -8702,7 +8733,7 @@ mod tests {
             synth_batch_size: Some(3),
             dit_cfg: Some(1.7),
             output_format: Some("flac".into()),
-            mp3_bitrate: Some(320),
+            mp3_bitrate: Some(320), fade_in: None, fade_out: None,
             models: Some(Mm3ModelSelection {
                 lm_model: Some("lm.gguf".into()),
                 depth_model: Some("depth.gguf".into()),
@@ -8742,7 +8773,7 @@ mod tests {
             synth_batch_size: None,
             dit_cfg: Some(1.7),
             output_format: Some("wav24".into()),
-            mp3_bitrate: None,
+            mp3_bitrate: None, fade_in: None, fade_out: None,
             models: Some(Mm3ModelSelection {
                 lm_model: Some("lm.gguf".into()),
                 depth_model: Some("depth.gguf".into()),
@@ -8765,7 +8796,7 @@ mod tests {
             caption: "night drive".into(), lyrics: "[verse] one line".into(), duration_seconds: 60.0,
             steps: None, seed: None, lm_seed: None, lm_cfg: None, lm_top_k: None,
             lm_batch_size: None, synth_batch_size: None, dit_cfg: None,
-            output_format: None, mp3_bitrate: None,
+            output_format: None, mp3_bitrate: None, fade_in: None, fade_out: None,
             models: Some(Mm3ModelSelection { lm_model: Some("lm.gguf".into()), depth_model: Some("depth.gguf".into()), cond_model: Some("condition.gguf".into()), dit_model: Some("dit.gguf".into()), vae_model: Some("vocoder.gguf".into()) }),
         };
         let body = mm_request_from(&request, None, None, None).unwrap();
@@ -8850,7 +8881,7 @@ mod tests {
                 synth_batch_size: None,
                 dit_cfg: None,
                 output_format: None,
-                mp3_bitrate: None,
+                mp3_bitrate: None, fade_in: None, fade_out: None,
                 models: None,
             },
             PRIMARY_MUSIC_ENGINE_ID.into(),

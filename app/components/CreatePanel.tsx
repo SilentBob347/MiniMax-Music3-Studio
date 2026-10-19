@@ -276,6 +276,8 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
   // Quality first, not "quick listen": the engine's own defaults are mp3 at
   // 128 kbps, which throws away what the vocoder produced.
   const [mp3Bitrate, setMp3Bitrate] = useState('320');
+  const [fadeIn, setFadeIn] = useState('');
+  const [fadeOut, setFadeOut] = useState('');
   // The engine's own default is 128 kbps, which throws away what the vocoder
   // produced; 320 is the top the encoder offers and costs a few megabytes.
   const [format, setFormat] = useState<Music3Request['output_format']>('flac');
@@ -382,6 +384,8 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
     setLmTopK(asString('lm_top_k'));
     setDitCfg(asString('dit_cfg'));
     setMp3Bitrate(asString('mp3_bitrate'));
+    setFadeIn(asString('fade_in'));
+    setFadeOut(asString('fade_out'));
     // the song's own seeds, kept: the random switch would throw the sound seed away
     setLmSeed(asString('lm_seed'));
     setSeed(asString('seed'));
@@ -397,7 +401,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
     setName(''); setGlobalMetadata(''); setVocalDetails(''); setArrangement(''); setLyrics(''); setInstrumental(false);
     setDuration(keptDuration()); setLmSeed(''); setLmCfg(''); setLmTopK(''); setAudioCodes('');
     setSteps(''); setDitCfg(''); setSynthBatch(''); setSeed('');
-    setMp3Bitrate('320'); setFormat('flac'); setModels({}); setAdapters([]);
+    setMp3Bitrate('320'); setFadeIn(''); setFadeOut(''); setFormat('flac'); setModels({}); setAdapters([]);
     setError(null);
   };
 
@@ -432,6 +436,10 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
       output_format: format,
       mp3_bitrate: numberOrUndefined(mp3Bitrate) ?? 320,
     };
+    const fadeInValue = numberOrUndefined(fadeIn);
+    if (fadeInValue !== undefined && fadeInValue > 0) request.fade_in = fadeInValue;
+    const fadeOutValue = numberOrUndefined(fadeOut);
+    if (fadeOutValue !== undefined && fadeOutValue > 0) request.fade_out = fadeOutValue;
     if (name.trim()) request.title = name.trim();
     if (coverPrompt.trim()) request.cover_prompt = coverPrompt.trim();
     if (audioCodes.trim()) request.audio_codes = audioCodes.trim();
@@ -471,6 +479,8 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
       setSeed(asString(parsed.seed));
       setRandomizeSeed(asString(parsed.seed) === '');
       setMp3Bitrate(asString(parsed.mp3_bitrate));
+      setFadeIn(asString(parsed.fade_in));
+      setFadeOut(asString(parsed.fade_out));
       if (typeof parsed.audio_codes === 'string') setAudioCodes(parsed.audio_codes);
       if (parsed.output_format === 'mp3' || parsed.output_format === 'flac' || parsed.output_format === 'wav32') setFormat(parsed.output_format);
       if (Array.isArray(parsed.adapters)) setAdapters(usesFromSettings(parsed));
@@ -679,6 +689,8 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
     cover_prompt: [coverPrompt, setCoverPrompt],
     output_format: [format, (value) => setFormat(value as Music3Request['output_format'])],
     mp3_bitrate: [mp3Bitrate, setMp3Bitrate],
+    fade_in: [fadeIn, setFadeIn],
+    fade_out: [fadeOut, setFadeOut],
   };
   useBridgeCommand('create_get', () => ({
     mode,
@@ -733,7 +745,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
   const resetParameters = () => {
     chooseDuration(''); setLmSeed(''); setLmCfg(''); setLmTopK(''); setAudioCodes('');
     setSteps(''); setDitCfg(''); setSynthBatch(''); setSeed(''); setRandomizeSeed(true);
-    setMp3Bitrate('320'); setFormat('flac'); setModels({});
+    setMp3Bitrate('320'); setFadeIn(''); setFadeOut(''); setFormat('flac'); setModels({});
   };
 
   return (
@@ -1080,6 +1092,10 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
                         <option value="wav32">WAV (32-bit float)</option>
                       </select>
                     </Field>
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <Field label={t('fadeInLabel')}><input value={fadeIn} onChange={event => setFadeIn(event.target.value)} placeholder="0" inputMode="decimal" className={CONTROL} /></Field>
+                    <Field label={t('fadeOutLabel')}><input value={fadeOut} onChange={event => setFadeOut(event.target.value)} placeholder="0" inputMode="decimal" className={CONTROL} /></Field>
                   </div>
                   <p className="mt-2 text-[11px] leading-4 text-zinc-500">{t('outputRawHint')}</p>
                   </Stage>

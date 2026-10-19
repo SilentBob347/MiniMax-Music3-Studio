@@ -1404,6 +1404,8 @@ fn tools() -> &'static [Tool] {
                     "mp3_bitrate": { "type": "integer" },
                     "models": { "type": "object", "description": "the five model files for this song, names from engine_options_get / models_status: lm_model, depth_model, cond_model, dit_model, vae_model", "properties": { "lm_model": { "type": "string" }, "depth_model": { "type": "string" }, "cond_model": { "type": "string" }, "dit_model": { "type": "string" }, "vae_model": { "type": "string" } } },
                     "output_format": { "type": "string", "enum": ["flac", "mp3"], "description": "how the song is kept: lossless FLAC (default), or MP3 at mp3_bitrate" },
+                    "fade_in": { "type": "number", "minimum": 0, "description": "seconds the studio fades the made song in over; 0 or absent leaves the start as sung" },
+                    "fade_out": { "type": "number", "minimum": 0, "description": "seconds the studio fades the made song out over at its end; 0 or absent leaves the end as sung" },
                     "cover_prompt": { "type": "string", "description": "what the cover should show; it is drawn only when an image model is set up (settings_get, covers), else the song has no cover" },
                     "adapters": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string" }, "scales": { "type": "object", "description": "slot -> strength; left out, the LoRA's own strengths, else 1 on each slot it touches" } }, "required": ["id"] } }
                 }), &["caption", "lyrics", "duration_seconds"]),

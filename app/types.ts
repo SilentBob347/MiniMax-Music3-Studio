@@ -114,6 +114,9 @@ export interface Music3Request {
   dit_cfg: number;
   output_format: 'flac' | 'mp3' | 'wav32';
   mp3_bitrate: number;
+  /** Seconds the studio fades the made song in and out over. */
+  fade_in?: number;
+  fade_out?: number;
   /** Library title only — never sent to the engine. */
   title?: string;
   /** LoRA adapters for this song, each with a strength per engine slot. */
