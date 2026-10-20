@@ -12,6 +12,7 @@ import { AdapterPicker } from './AdapterPicker';
 import { CreatePlaylistModal } from './PlaylistModals';
 import { SlideToEnable } from './SlideToEnable';
 import { usesFromSettings, type AdapterUse } from '../services/adapters';
+import { explainCliFailure } from '../services/cliFailure';
 
 /**
  * The Music3 request form.
@@ -84,6 +85,22 @@ const keptDuration = (): string => {
     const kept = Number(window.localStorage.getItem('studio.createDuration'));
     return kept >= 10 && kept <= MAX_DURATION_SECONDS ? String(kept) : '';
   } catch { return ''; }
+};
+/** The file format last chosen by hand, kept between sessions like the duration. */
+/** The words of the form (name, style, lyrics), kept across restarts until Reset clears them. */
+const DRAFT_KEY = 'studio.createDraft';
+function keptDraft(): Record<string, string> {
+  try {
+    const kept: unknown = JSON.parse(window.localStorage.getItem(DRAFT_KEY) ?? '{}');
+    return kept && typeof kept === 'object' ? (kept as Record<string, string>) : {};
+  } catch { return {}; }
+}
+
+const keptFormat = (): Music3Request['output_format'] => {
+  try {
+    const kept = window.localStorage.getItem('studio.createFormat');
+    return kept === 'mp3' || kept === 'wav32' ? kept : 'flac';
+  } catch { return 'flac'; }
 };
 const PROFILE_LABEL: Record<string, string> = {
   native: 'Full Native',
@@ -246,13 +263,16 @@ const NO_ACTIVITY: ActivityEntry[] = [];
 export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerating, activeJobCount = 0, initialData, playlists, onCreatePlaylist, playlistId, onChoosePlaylist }) => {
   const { t } = useI18n();
 
-  const [name, setName] = useState('');
+  const [name, setName] = useState(() => keptDraft().name ?? '');
   // The caption is three labelled panes, the way the model was trained and the
   // way MiniMax's own demo edits it.
-  const [globalMetadata, setGlobalMetadata] = useState('');
-  const [vocalDetails, setVocalDetails] = useState('');
-  const [arrangement, setArrangement] = useState('');
-  const [lyrics, setLyrics] = useState('');
+  const [globalMetadata, setGlobalMetadata] = useState(() => keptDraft().globalMetadata ?? '');
+  const [vocalDetails, setVocalDetails] = useState(() => keptDraft().vocalDetails ?? '');
+  const [arrangement, setArrangement] = useState(() => keptDraft().arrangement ?? '');
+  const [lyrics, setLyrics] = useState(() => keptDraft().lyrics ?? '');
+  useEffect(() => {
+    try { window.localStorage.setItem(DRAFT_KEY, JSON.stringify({ name, globalMetadata, vocalDetails, arrangement, lyrics })); } catch { /* kept until a reload */ }
+  }, [name, globalMetadata, vocalDetails, arrangement, lyrics]);
   const [instrumental, setInstrumental] = useState(false);
   const [randomizeSeed, setRandomizeSeed] = useState(true);
 
@@ -276,9 +296,15 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
   // Quality first, not "quick listen": the engine's own defaults are mp3 at
   // 128 kbps, which throws away what the vocoder produced.
   const [mp3Bitrate, setMp3Bitrate] = useState('320');
+  const [fadeIn, setFadeIn] = useState('');
+  const [fadeOut, setFadeOut] = useState('');
   // The engine's own default is 128 kbps, which throws away what the vocoder
   // produced; 320 is the top the encoder offers and costs a few megabytes.
-  const [format, setFormat] = useState<Music3Request['output_format']>('flac');
+  const [format, setFormat] = useState<Music3Request['output_format']>(keptFormat);
+  const chooseFormat = (value: Music3Request['output_format']) => {
+    setFormat(value);
+    try { window.localStorage.setItem('studio.createFormat', value); } catch { /* kept until a reload */ }
+  };
   const [models, setModels] = useState<Record<string, string>>({});
   const [adapters, setAdapters] = useState<AdapterUse[]>([]);
 
@@ -382,6 +408,8 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
     setLmTopK(asString('lm_top_k'));
     setDitCfg(asString('dit_cfg'));
     setMp3Bitrate(asString('mp3_bitrate'));
+    setFadeIn(asString('fade_in'));
+    setFadeOut(asString('fade_out'));
     // the song's own seeds, kept: the random switch would throw the sound seed away
     setLmSeed(asString('lm_seed'));
     setSeed(asString('seed'));
@@ -397,7 +425,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
     setName(''); setGlobalMetadata(''); setVocalDetails(''); setArrangement(''); setLyrics(''); setInstrumental(false);
     setDuration(keptDuration()); setLmSeed(''); setLmCfg(''); setLmTopK(''); setAudioCodes('');
     setSteps(''); setDitCfg(''); setSynthBatch(''); setSeed('');
-    setMp3Bitrate('320'); setFormat('flac'); setModels({}); setAdapters([]);
+    setMp3Bitrate('320'); setFadeIn(''); setFadeOut(''); setFormat(keptFormat()); setModels({}); setAdapters([]);
     setError(null);
   };
 
@@ -432,6 +460,10 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
       output_format: format,
       mp3_bitrate: numberOrUndefined(mp3Bitrate) ?? 320,
     };
+    const fadeInValue = numberOrUndefined(fadeIn);
+    if (fadeInValue !== undefined && fadeInValue > 0) request.fade_in = fadeInValue;
+    const fadeOutValue = numberOrUndefined(fadeOut);
+    if (fadeOutValue !== undefined && fadeOutValue > 0) request.fade_out = fadeOutValue;
     if (name.trim()) request.title = name.trim();
     if (coverPrompt.trim()) request.cover_prompt = coverPrompt.trim();
     if (audioCodes.trim()) request.audio_codes = audioCodes.trim();
@@ -471,6 +503,8 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
       setSeed(asString(parsed.seed));
       setRandomizeSeed(asString(parsed.seed) === '');
       setMp3Bitrate(asString(parsed.mp3_bitrate));
+      setFadeIn(asString(parsed.fade_in));
+      setFadeOut(asString(parsed.fade_out));
       if (typeof parsed.audio_codes === 'string') setAudioCodes(parsed.audio_codes);
       if (parsed.output_format === 'mp3' || parsed.output_format === 'flac' || parsed.output_format === 'wav32') setFormat(parsed.output_format);
       if (Array.isArray(parsed.adapters)) setAdapters(usesFromSettings(parsed));
@@ -586,7 +620,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
       // Giving up on a run is not an error to report back at the person who
       // gave up on it.
       const cancelled = reason instanceof DOMException && reason.name === 'AbortError';
-      if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
+      if (!cancelled) setError(explainCliFailure(reason instanceof Error ? reason.message : String(reason), t));
     } finally {
       assistRun.current = null;
       setAssisting(null);
@@ -615,7 +649,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
       setLyrics(body.lyrics);
     } catch (reason) {
       const cancelled = reason instanceof DOMException && reason.name === 'AbortError';
-      if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
+      if (!cancelled) setError(explainCliFailure(reason instanceof Error ? reason.message : String(reason), t));
     } finally {
       assistRun.current = null;
       setAssisting(null);
@@ -679,6 +713,8 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
     cover_prompt: [coverPrompt, setCoverPrompt],
     output_format: [format, (value) => setFormat(value as Music3Request['output_format'])],
     mp3_bitrate: [mp3Bitrate, setMp3Bitrate],
+    fade_in: [fadeIn, setFadeIn],
+    fade_out: [fadeOut, setFadeOut],
   };
   useBridgeCommand('create_get', () => ({
     mode,
@@ -733,7 +769,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
   const resetParameters = () => {
     chooseDuration(''); setLmSeed(''); setLmCfg(''); setLmTopK(''); setAudioCodes('');
     setSteps(''); setDitCfg(''); setSynthBatch(''); setSeed(''); setRandomizeSeed(true);
-    setMp3Bitrate('320'); setFormat('flac'); setModels({});
+    setMp3Bitrate('320'); setFadeIn(''); setFadeOut(''); chooseFormat('flac'); setModels({});
   };
 
   return (
@@ -1074,12 +1110,16 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
                       </select>
                     </Field>
                     <Field label={t('outputFormat')}>
-                      <select value={format} onChange={event => setFormat(event.target.value as Music3Request['output_format'])} className={CONTROL}>
+                      <select value={format} onChange={event => chooseFormat(event.target.value as Music3Request['output_format'])} className={CONTROL}>
                         <option value="flac">FLAC</option>
                         <option value="mp3">MP3</option>
                         <option value="wav32">WAV (32-bit float)</option>
                       </select>
                     </Field>
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <Field label={t('fadeInLabel')}><input value={fadeIn} onChange={event => setFadeIn(event.target.value)} placeholder="0" inputMode="decimal" className={CONTROL} /></Field>
+                    <Field label={t('fadeOutLabel')}><input value={fadeOut} onChange={event => setFadeOut(event.target.value)} placeholder="0" inputMode="decimal" className={CONTROL} /></Field>
                   </div>
                   <p className="mt-2 text-[11px] leading-4 text-zinc-500">{t('outputRawHint')}</p>
                   </Stage>
