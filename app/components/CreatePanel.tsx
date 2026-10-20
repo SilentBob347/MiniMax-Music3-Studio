@@ -86,6 +86,13 @@ const keptDuration = (): string => {
     return kept >= 10 && kept <= MAX_DURATION_SECONDS ? String(kept) : '';
   } catch { return ''; }
 };
+/** The file format last chosen by hand, kept between sessions like the duration. */
+const keptFormat = (): Music3Request['output_format'] => {
+  try {
+    const kept = window.localStorage.getItem('studio.createFormat');
+    return kept === 'mp3' || kept === 'wav32' ? kept : 'flac';
+  } catch { return 'flac'; }
+};
 const PROFILE_LABEL: Record<string, string> = {
   native: 'Full Native',
   'quality-q8': 'Q8 Quality',
@@ -281,7 +288,11 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
   const [fadeOut, setFadeOut] = useState('');
   // The engine's own default is 128 kbps, which throws away what the vocoder
   // produced; 320 is the top the encoder offers and costs a few megabytes.
-  const [format, setFormat] = useState<Music3Request['output_format']>('flac');
+  const [format, setFormat] = useState<Music3Request['output_format']>(keptFormat);
+  const chooseFormat = (value: Music3Request['output_format']) => {
+    setFormat(value);
+    try { window.localStorage.setItem('studio.createFormat', value); } catch { /* kept until a reload */ }
+  };
   const [models, setModels] = useState<Record<string, string>>({});
   const [adapters, setAdapters] = useState<AdapterUse[]>([]);
 
@@ -402,7 +413,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
     setName(''); setGlobalMetadata(''); setVocalDetails(''); setArrangement(''); setLyrics(''); setInstrumental(false);
     setDuration(keptDuration()); setLmSeed(''); setLmCfg(''); setLmTopK(''); setAudioCodes('');
     setSteps(''); setDitCfg(''); setSynthBatch(''); setSeed('');
-    setMp3Bitrate('320'); setFadeIn(''); setFadeOut(''); setFormat('flac'); setModels({}); setAdapters([]);
+    setMp3Bitrate('320'); setFadeIn(''); setFadeOut(''); setFormat(keptFormat()); setModels({}); setAdapters([]);
     setError(null);
   };
 
@@ -746,7 +757,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
   const resetParameters = () => {
     chooseDuration(''); setLmSeed(''); setLmCfg(''); setLmTopK(''); setAudioCodes('');
     setSteps(''); setDitCfg(''); setSynthBatch(''); setSeed(''); setRandomizeSeed(true);
-    setMp3Bitrate('320'); setFadeIn(''); setFadeOut(''); setFormat('flac'); setModels({});
+    setMp3Bitrate('320'); setFadeIn(''); setFadeOut(''); chooseFormat('flac'); setModels({});
   };
 
   return (
@@ -1087,7 +1098,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
                       </select>
                     </Field>
                     <Field label={t('outputFormat')}>
-                      <select value={format} onChange={event => setFormat(event.target.value as Music3Request['output_format'])} className={CONTROL}>
+                      <select value={format} onChange={event => chooseFormat(event.target.value as Music3Request['output_format'])} className={CONTROL}>
                         <option value="flac">FLAC</option>
                         <option value="mp3">MP3</option>
                         <option value="wav32">WAV (32-bit float)</option>
