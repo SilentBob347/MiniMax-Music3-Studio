@@ -87,6 +87,15 @@ const keptDuration = (): string => {
   } catch { return ''; }
 };
 /** The file format last chosen by hand, kept between sessions like the duration. */
+/** The words of the form (name, style, lyrics), kept across restarts until Reset clears them. */
+const DRAFT_KEY = 'studio.createDraft';
+function keptDraft(): Record<string, string> {
+  try {
+    const kept: unknown = JSON.parse(window.localStorage.getItem(DRAFT_KEY) ?? '{}');
+    return kept && typeof kept === 'object' ? (kept as Record<string, string>) : {};
+  } catch { return {}; }
+}
+
 const keptFormat = (): Music3Request['output_format'] => {
   try {
     const kept = window.localStorage.getItem('studio.createFormat');
@@ -254,13 +263,16 @@ const NO_ACTIVITY: ActivityEntry[] = [];
 export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerating, activeJobCount = 0, initialData, playlists, onCreatePlaylist, playlistId, onChoosePlaylist }) => {
   const { t } = useI18n();
 
-  const [name, setName] = useState('');
+  const [name, setName] = useState(() => keptDraft().name ?? '');
   // The caption is three labelled panes, the way the model was trained and the
   // way MiniMax's own demo edits it.
-  const [globalMetadata, setGlobalMetadata] = useState('');
-  const [vocalDetails, setVocalDetails] = useState('');
-  const [arrangement, setArrangement] = useState('');
-  const [lyrics, setLyrics] = useState('');
+  const [globalMetadata, setGlobalMetadata] = useState(() => keptDraft().globalMetadata ?? '');
+  const [vocalDetails, setVocalDetails] = useState(() => keptDraft().vocalDetails ?? '');
+  const [arrangement, setArrangement] = useState(() => keptDraft().arrangement ?? '');
+  const [lyrics, setLyrics] = useState(() => keptDraft().lyrics ?? '');
+  useEffect(() => {
+    try { window.localStorage.setItem(DRAFT_KEY, JSON.stringify({ name, globalMetadata, vocalDetails, arrangement, lyrics })); } catch { /* kept until a reload */ }
+  }, [name, globalMetadata, vocalDetails, arrangement, lyrics]);
   const [instrumental, setInstrumental] = useState(false);
   const [randomizeSeed, setRandomizeSeed] = useState(true);
 
