@@ -146,8 +146,13 @@ impl Downloader {
     }
 
     /// A model is installed when its file is there; a runtime when its own
-    /// marker file is present in the directory it unpacks into.
+    /// marker file is present in the directory it unpacks into, and it is the
+    /// build the studio pins now (see `from_the_pin`).
     pub fn is_installed(&self, asset: &Asset) -> bool {
+        self.is_on_disk(asset) && self.from_the_pin(asset)
+    }
+
+    fn is_on_disk(&self, asset: &Asset) -> bool {
         if !asset.pick.is_empty() {
             let destination = self.picked_into(asset);
             return asset.pick.iter().all(|name| destination.join(picked_file_name(name)).is_file());
@@ -169,6 +174,62 @@ impl Downloader {
         // on someone else's repository - a routine thing, and none of our
         // business - made it permanently un-installable.
         fs::metadata(self.path_of(asset)).map(|meta| meta.len() > 0).unwrap_or(false)
+    }
+
+    /// Where the address a runtime was fetched from is kept: beside a single file, inside the folder an archive
+    /// unpacked into.
+    fn source_record(&self, asset: &Asset) -> PathBuf {
+        if !asset.pick.is_empty() || asset.unzip_into.is_some() {
+            let folder = if asset.pick.is_empty() { self.runtime_dir(asset.unzip_into.unwrap_or(".")) } else { self.picked_into(asset) };
+            return folder.join(format!(".source-{}", asset.id));
+        }
+        let path = self.path_of(asset);
+        PathBuf::from(format!("{}.source", path.display()))
+    }
+
+    fn record_source(&self, asset: &Asset) {
+        if asset.kind != AssetKind::Runtime {
+            return;
+        }
+        let record = self.source_record(asset);
+        if let Err(error) = fs::write(&record, asset.url) {
+            eprintln!("[ERROR] {}: the source of {} could not be kept: {error}", record.display(), asset.id);
+        }
+    }
+
+    /// Whether a runtime on disk is the one the studio pins: its address is the pin (the version or commit is part
+    /// of it), so a build of an earlier release - the same file names, other code - is not taken for installed. A
+    /// runtime installed before addresses were kept is judged by size when it is one file; an archive's files carry no
+    /// size of their own and are taken as they are, once.
+    fn from_the_pin(&self, asset: &Asset) -> bool {
+        if asset.kind != AssetKind::Runtime {
+            return true;
+        }
+        match fs::read_to_string(self.source_record(asset)) {
+            Ok(source) => source.trim() == asset.url,
+            Err(_) => {
+                let single = asset.pick.is_empty() && asset.unzip_into.is_none();
+                let expected = crate::sizes::known(asset.url).unwrap_or(asset.bytes);
+                let matches = !single || expected == 0 || fs::metadata(self.path_of(asset)).is_ok_and(|meta| meta.len() == expected);
+                if matches {
+                    self.record_source(asset);
+                }
+                matches
+            }
+        }
+    }
+
+    /// Clears a runtime of an earlier pin, so the download that follows fetches the pinned one instead of finding
+    /// the old files and stopping there.
+    fn drop_stale(&self, asset: &Asset) -> Result<()> {
+        if asset.kind != AssetKind::Runtime || !self.is_on_disk(asset) || self.from_the_pin(asset) {
+            return Ok(());
+        }
+        self.remove(asset)?;
+        // an archive left beside its folder would be unpacked again instead of fetched
+        let _ = fs::remove_file(self.path_of(asset));
+        let _ = fs::remove_file(self.source_record(asset));
+        Ok(())
     }
 
     pub fn partial_bytes(&self, asset: &Asset) -> u64 {
@@ -448,6 +509,13 @@ impl Downloader {
     /// given rather than the downloader's own, because several of these run at
     /// the same time.
     async fn fetch_now(&self, asset: &'static Asset, cell: &Arc<Mutex<Option<DownloadProgress>>>) -> Result<()> {
+        self.drop_stale(asset)?;
+        self.fetch_unrecorded(asset, cell).await?;
+        self.record_source(asset);
+        Ok(())
+    }
+
+    async fn fetch_unrecorded(&self, asset: &'static Asset, cell: &Arc<Mutex<Option<DownloadProgress>>>) -> Result<()> {
         if !asset.pick.is_empty() {
             // The whole archive over the resumable downloader, then the wanted
             // files extracted locally. Reading named files straight out of a
@@ -486,7 +554,9 @@ impl Downloader {
         }
 
         self.cancel.store(false, std::sync::atomic::Ordering::Relaxed);
+        self.drop_stale(asset)?;
         let target = self.path_of(asset);
+        let recorder = self.clone();
         let root = self.root.clone();
         let runtime_root = self.runtime_root.clone();
         let http = self.http.clone();
@@ -503,6 +573,9 @@ impl Downloader {
                     None => root.clone(),
                 };
                 let outcome = download_and_extract_named(&http, asset, &destination, &progress, cancel).await;
+                if outcome.is_ok() {
+                    recorder.record_source(asset);
+                }
                 let mut guard = progress.lock().await;
                 if let Some(active) = guard.as_mut() {
                     active.done = true;
@@ -519,6 +592,9 @@ impl Downloader {
                 },
                 Err(error) => Some(error.to_string()),
             };
+            if error.is_none() {
+                recorder.record_source(asset);
+            }
             if let Some(active) = guard.as_mut() {
                 active.done = true;
                 active.error = error;
@@ -906,6 +982,38 @@ mod tests {
             vram_gb: None,
             note: "",
         }
+    }
+
+    /// A runtime of an earlier pin keeps its file names, so presence alone does not make it installed.
+    #[test]
+    fn a_runtime_of_an_earlier_pin_is_not_installed() {
+        let root = std::env::temp_dir().join(format!("downloads-{}", uuid::Uuid::now_v7()));
+        let downloader = Downloader::new(root.clone());
+        let pinned = Asset { id: "test-engine", kind: AssetKind::Runtime, url: "https://example.invalid/engine-0.1.3/engine.dll", relative_path: "engine/engine.dll", ..asset() };
+        let path = downloader.path_of(&pinned);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+
+        // installed before addresses were kept: another size is another build
+        fs::write(&path, vec![0u8; 40]).unwrap();
+        assert!(!downloader.is_installed(&pinned));
+        downloader.drop_stale(&pinned).unwrap();
+        assert!(!path.exists(), "the old build goes, so the download fetches the pinned one");
+
+        // the pinned size is taken, and its address kept from then on
+        fs::write(&path, vec![0u8; 64]).unwrap();
+        assert!(downloader.is_installed(&pinned));
+        assert_eq!(fs::read_to_string(downloader.source_record(&pinned)).unwrap(), pinned.url);
+
+        // a later pin of the same size is told apart by its address
+        let next = Asset { url: "https://example.invalid/engine-0.1.4/engine.dll", ..pinned };
+        assert!(!downloader.is_installed(&next));
+
+        // a model is never judged by its address
+        let model = Asset { url: "https://example.invalid/elsewhere/model.bin", ..asset() };
+        fs::create_dir_all(downloader.path_of(&model).parent().unwrap()).unwrap();
+        fs::write(downloader.path_of(&model), vec![0u8; 10]).unwrap();
+        assert!(downloader.is_installed(&model));
+        fs::remove_dir_all(&root).ok();
     }
 
     #[test]

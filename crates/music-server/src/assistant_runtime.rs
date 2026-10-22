@@ -455,6 +455,44 @@ impl AssistantRuntime {
     }
 
     fn is_installed(&self, asset: &Asset) -> bool {
+        self.is_on_disk(asset) && self.from_the_pin(asset)
+    }
+
+    /// Where the address a runtime was unpacked from is kept, in its own folder.
+    fn source_record(&self, asset: &Asset) -> Option<PathBuf> {
+        asset.unzip_into.map(|flavour| self.root.join("runtime").join(flavour).join(format!(".source-{}", asset.id)))
+    }
+
+    fn record_source(&self, asset: &Asset) {
+        if let Some(record) = self.source_record(asset) {
+            if let Err(error) = fs::write(&record, asset.url) {
+                eprintln!("[ERROR] {}: the source of {} could not be kept: {error}", record.display(), asset.id);
+            }
+        }
+    }
+
+    /// Whether an unpacked runtime is the pinned llama.cpp build (its address names the build): another build in the
+    /// same folder is not installed. One unpacked before addresses were kept is taken as it is, once.
+    fn from_the_pin(&self, asset: &Asset) -> bool {
+        let Some(record) = self.source_record(asset) else { return true };
+        match fs::read_to_string(&record) {
+            Ok(source) => source.trim() == asset.url,
+            Err(_) => {
+                self.record_source(asset);
+                true
+            }
+        }
+    }
+
+    /// Clears a runtime of an earlier build so the download fetches the pinned one.
+    fn drop_stale(&self, asset: &Asset) -> Result<()> {
+        if asset.unzip_into.is_some() && self.is_on_disk(asset) && !self.from_the_pin(asset) {
+            self.remove(asset.id)?;
+        }
+        Ok(())
+    }
+
+    fn is_on_disk(&self, asset: &Asset) -> bool {
         if let Some(flavour) = asset.unzip_into {
             // A runtime counts as installed once its own directory has content:
             // the CUDA libraries carry no llama-server of their own.
@@ -597,10 +635,13 @@ impl AssistantRuntime {
         let mut failure = None;
         for asset in &pending {
             let target = self.path_of(asset);
-            let outcome = match download_asset(&self.http, asset, &target, &self.state, base, self.cancel.clone()).await {
-                Ok(()) => match asset.unzip_into {
-                    Some(flavour) => crate::downloads::extract_archive(&target, &self.root.join("runtime").join(flavour)),
-                    None => Ok(()),
+            let outcome = match self.drop_stale(asset) {
+                Ok(()) => match download_asset(&self.http, asset, &target, &self.state, base, self.cancel.clone()).await {
+                    Ok(()) => match asset.unzip_into {
+                        Some(flavour) => crate::downloads::extract_archive(&target, &self.root.join("runtime").join(flavour)).map(|()| self.record_source(asset)),
+                        None => Ok(()),
+                    },
+                    Err(error) => Err(error),
                 },
                 Err(error) => Err(error),
             };
@@ -647,10 +688,12 @@ impl AssistantRuntime {
             });
         }
 
+        self.drop_stale(asset)?;
         let target = self.path_of(asset);
         let http = self.http.clone();
         let state = self.state.clone();
         let root = self.root.clone();
+        let record = self.source_record(asset);
         tokio::spawn(async move {
             let outcome = download_asset(&http, asset, &target, &state, 0, Arc::new(std::sync::atomic::AtomicBool::new(false))).await;
             let mut guard = state.lock().await;
@@ -660,6 +703,11 @@ impl AssistantRuntime {
                         Some(flavour) => crate::downloads::extract_archive(&target, &root.join("runtime").join(flavour)),
                         None => Ok(()),
                     };
+                    if let (Ok(()), Some(record)) = (&extraction, &record) {
+                        if let Err(error) = fs::write(record, asset.url) {
+                            eprintln!("[ERROR] {}: the source of {} could not be kept: {error}", record.display(), asset.id);
+                        }
+                    }
                     if let Some(progress) = guard.download.as_mut() {
                         progress.done = true;
                         progress.error = extraction.err().map(|error| error.to_string());
