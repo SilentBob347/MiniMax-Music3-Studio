@@ -8,6 +8,8 @@ Windows build.
 
 ### Fixed
 
+- **The create form keeps its settings** ([YuE2 Studio #134](https://github.com/timoncool/YuE2-Studio/issues/134)): the steps, the solver, guidance, sampling and the other generation settings went back to their defaults at every start and every F5; they now stay, as the words, the length and the file format do, until "Reset to reference" puts the defaults back.
+- **Change cover works in the Library** ([ACE-Step Studio #48](https://github.com/timoncool/ACE-Step-Studio/issues/48)): the button showed on the Library's songs but opened nothing; it opens the cover editor as on the create page.
 - **Mel-Band RoFormer and HT-Demucs download from Settings - Models - Split into stems** ([YuE2 Studio #134](https://github.com/timoncool/YuE2-Studio/issues/134)): the card's Download button sent the engine's name, which the studio did not know ("unknown asset roformer"), so neither separator could be installed from there in 3.7.0; it now installs the engine whole on the chosen device, the bin removes that engine's files (it always removed HT-Demucs before), and the runtime downloading after HT-Demucs's model shows its progress instead of "not installed".
 - **Karaoke recognition no longer closes the studio on processors without AVX-512**: the transcribe.cpp engine of 3.7.0 was built for the processor it was built on and used AVX-512 instructions, so on most Intel and older AMD processors the first karaoke stopped the studio without a word. The engine is now built for every x86-64 processor with AVX2 (Intel since 2013, AMD since 2017), as fast as before, and on a processor without AVX2 the studio says so instead of closing.
 ## 2026-10-21 — 3.7.0
