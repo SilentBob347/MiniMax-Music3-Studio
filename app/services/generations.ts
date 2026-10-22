@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useI18n } from '../context/I18nContext';
+import { songErrorText } from '../i18n/songErrors';
 import type { Music3Job, Music3Progress, Music3Request, Song } from '../types';
 import { followEngineProgress, stageDetail, type StageClock } from './engineProgress';
 import { mapNativeLibrarySong, setNativeSongNote } from './nativeLibrary';
@@ -85,7 +86,7 @@ function generationFailed(): void {
 }
 
 export function useGenerations({ enabled, notify, onFinished }: GenerationOptions) {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const [cards, setCards] = useState<Song[]>([]);
   // job -> the row its card was drawn in; kept after the card is gone, so the
   // song that took the row keeps it
@@ -157,7 +158,7 @@ export function useGenerations({ enabled, notify, onFinished }: GenerationOption
     if (made.length === 0) {
       remove(finished.id);
       generationFailed();
-      notify(job.message || t('generationFailed'), 'error');
+      notify(songErrorText(job, language) || t('generationFailed'), 'error');
       return;
     }
     const note = takePendingNote(finished.id, made, noteError);
@@ -188,7 +189,7 @@ export function useGenerations({ enabled, notify, onFinished }: GenerationOption
         leftEarly.current.delete(jobId);
         remove(running.id);
         if (job.status === 'failed') generationFailed();
-        notify(job.message || t('generationFailed'), job.status === 'failed' ? 'error' : 'info');
+        notify(songErrorText(job, language) || t('generationFailed'), job.status === 'failed' ? 'error' : 'info');
       }
       // still queued or running: the list was read before this job was sent
     } catch (error) {
@@ -269,7 +270,7 @@ export function useGenerations({ enabled, notify, onFinished }: GenerationOption
       });
       const job = (await response.json().catch(() => null)) as (Music3Job & { error?: string }) | null;
       if (!response.ok || !job || job.status === 'failed') {
-        throw new Error(job?.message || job?.error || `Music3 rejected this request (${response.status})`);
+        throw new Error((job && songErrorText(job, language)) || job?.error || `Music3 rejected this request (${response.status})`);
       }
       follow(id, job);
     } catch (error) {
@@ -277,7 +278,7 @@ export function useGenerations({ enabled, notify, onFinished }: GenerationOption
       generationFailed();
       notify(error instanceof Error ? error.message : t('generationFailed'), 'error');
     }
-  }, [follow, remove, notify, t]);
+  }, [follow, remove, notify, t, language]);
 
   /** A job sent from elsewhere in this window (a re-render) gets its card. */
   const track = useCallback((jobId: string, fields: CardFields) => {

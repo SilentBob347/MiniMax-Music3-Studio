@@ -25,6 +25,7 @@ Windows build.
 ### Changed
 
 - **The Library shows a song's details beside the list**, as the create page does ([ACE-Step Studio #48](https://github.com/timoncool/ACE-Step-Studio/issues/48)): a click on a row chooses the song without playing it, the cover plays it, and on a narrow window the details open over the page as before. In Russian the Library is called «Медиатека».
+- **Why a song failed is said in the studio's language**: a song refused before it is sent, lost with an engine that restarted, given up by the engine or not taken into the library is told in English, Russian, Chinese, Japanese or Korean, as the window is set; the service keeps the English text for its log, the statistics and agents, with a code and fields beside it.
 - **Engine updated from minimaxmusic.cpp upstream**: the latest ggml and the --device choice of the compute device; our fixes stay on top.
 
 ## 2026-10-21 — 3.7.0

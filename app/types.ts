@@ -158,6 +158,9 @@ export interface Music3Job {
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
   phase: string;
   message: string;
+  /** For a failed job, why as a code and fields the window translates (i18n/songErrors.ts). */
+  code?: string;
+  params?: Record<string, unknown>;
   title?: string;
   caption: string;
   lyrics: string;

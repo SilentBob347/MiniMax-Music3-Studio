@@ -1,0 +1,238 @@
+//! Why a song failed, as the window shows it.
+//!
+//! Each reason has a code and fields: the window translates it by the code
+//! (`app/i18n/songErrors.ts`), while the English text stays for the log, the hub
+//! and agents. The hub groups failures by that text, so it is word for word the
+//! text of before. A reason without a kind of its own travels as `Raw` and is
+//! shown as it is. The codes are the same in every music studio; a studio adds
+//! codes for its own engine and never renames these.
+
+use std::fmt;
+
+use serde_json::{json, Map, Value};
+
+/// What the studio's engine server calls itself in its messages.
+const ENGINE: &str = "mm-server";
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SongError {
+    /// A reason with no kind of its own: shown as it is.
+    Raw(String),
+    PromptTooLong { tokens: u64, limit: u64 },
+    KvCacheShort { needed: u64, tokens: u64, frames: u64, seconds: u64, max_seq: u64, suggest: u64 },
+    TrainingOnCard,
+    /// Lost with an engine that restarted: the card's memory ran out.
+    LostVram,
+    /// Lost with an engine that restarted: the computer's memory ran out.
+    LostRam,
+    /// Lost with an engine that restarted: the card failed, in the engine's own words when it gave any.
+    LostDevice(Option<String>),
+    /// Lost with an engine that restarted, whose last line says where it was.
+    LostAtLine(String),
+    Lost,
+    /// The engine gave the song up while loading the models: the card's memory ran out.
+    LoadVram,
+    /// The engine gave the song up while loading the models: the computer's memory ran out.
+    LoadRam,
+    /// The engine gave the song up with this FATAL line.
+    EngineFatal(String),
+    EngineFailed,
+    EngineUnreachable(String),
+    ImportFailed(String),
+    OpenRouterNoModel,
+    OpenRouterCatalogStale,
+    OpenRouterFailed(String),
+}
+
+impl SongError {
+    /// The code the window finds the translation by; `None` for a reason shown as it is.
+    pub fn code(&self) -> Option<&'static str> {
+        Some(match self {
+            SongError::Raw(_) => return None,
+            SongError::PromptTooLong { .. } => "prompt_too_long",
+            SongError::KvCacheShort { .. } => "kv_cache_short",
+            SongError::TrainingOnCard => "training_on_card",
+            SongError::LostVram => "lost_vram",
+            SongError::LostRam => "lost_ram",
+            SongError::LostDevice(Some(_)) => "lost_device",
+            SongError::LostDevice(None) => "lost_device_silent",
+            SongError::LostAtLine(_) => "lost_at_line",
+            SongError::Lost => "lost",
+            SongError::LoadVram => "load_vram",
+            SongError::LoadRam => "load_ram",
+            SongError::EngineFatal(_) => "engine_fatal",
+            SongError::EngineFailed => "engine_failed",
+            SongError::EngineUnreachable(_) => "engine_unreachable",
+            SongError::ImportFailed(_) => "import_failed",
+            SongError::OpenRouterNoModel => "openrouter_no_model",
+            SongError::OpenRouterCatalogStale => "openrouter_catalog_stale",
+            SongError::OpenRouterFailed(_) => "openrouter_failed",
+        })
+    }
+
+    /// The fields put into the translation: counts, and the engine's or the network's own words.
+    pub fn params(&self) -> Map<String, Value> {
+        let mut params = Map::new();
+        let mut put = |key: &str, value: Value| {
+            params.insert(key.to_string(), value);
+        };
+        match self {
+            SongError::PromptTooLong { tokens, limit } => {
+                put("tokens", json!(tokens));
+                put("limit", json!(limit));
+                put("over", json!(tokens.saturating_sub(*limit)));
+            }
+            SongError::KvCacheShort { needed, tokens, frames, seconds, max_seq, suggest } => {
+                put("needed", json!(needed));
+                put("tokens", json!(tokens));
+                put("frames", json!(frames));
+                put("seconds", json!(seconds));
+                put("max_seq", json!(max_seq));
+                put("suggest", json!(suggest));
+            }
+            SongError::LostDevice(Some(detail))
+            | SongError::EngineUnreachable(detail)
+            | SongError::ImportFailed(detail)
+            | SongError::OpenRouterFailed(detail) => put("detail", json!(detail)),
+            SongError::LostAtLine(line) | SongError::EngineFatal(line) => put("line", json!(line)),
+            _ => {}
+        }
+        params
+    }
+}
+
+impl fmt::Display for SongError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SongError::Raw(text) => f.write_str(text),
+            SongError::PromptTooLong { tokens, limit } => write!(
+                f,
+                "The caption and lyrics are {tokens} tokens, over the model's limit of {limit}: shorten the caption or the lyrics by {} tokens.",
+                tokens.saturating_sub(*limit)
+            ),
+            SongError::KvCacheShort { needed, tokens, frames, seconds, max_seq, suggest } => write!(
+                f,
+                "This song needs {needed} places in the language model's cache ({tokens} tokens of caption and lyrics and {frames} frames for {seconds} s of music), but the engine settings limit that cache (LM KV cache, --max-seq) to {max_seq}. Set it to {suggest} or more, or clear the field to use the model's full length."
+            ),
+            SongError::TrainingOnCard => f.write_str("a LoRA is training on the card; make songs once it finishes"),
+            SongError::LostVram => f.write_str("The graphics card ran out of memory on this song and the engine restarted, so the song was lost. Choose a smaller model set in the model manager or a shorter song, and close whatever else uses the card; a card below the smallest set cannot make songs."),
+            SongError::LostRam => f.write_str("The computer ran out of memory (RAM) on this song and the engine restarted, so the song was lost. Close other programs that take memory, or choose a smaller model set in the model manager or a shorter song."),
+            SongError::LostDevice(Some(detail)) => write!(f, "The graphics card failed during this song ({detail}) and the engine restarted, so the song was lost. The engine log is in Settings, Engine."),
+            SongError::LostDevice(None) => f.write_str("The graphics card failed during this song (a CUDA or driver error) and the engine restarted, so the song was lost. The engine log is in Settings, Engine."),
+            SongError::LostAtLine(line) => write!(f, "The engine stopped during this song and restarted, so the song was lost; its last line was {line}. The engine log is in Settings, Engine."),
+            SongError::Lost => f.write_str("The engine stopped during this song and restarted, so the song was lost. The engine log is in Settings, Engine."),
+            SongError::LoadVram => f.write_str("The graphics card ran out of memory while the engine was loading the models. Choose a smaller quantisation in the model manager, or close whatever else is using the card - the writing assistant holds several gigabytes of its own."),
+            SongError::LoadRam => f.write_str("The computer ran out of memory (RAM) while the engine was loading the models. Close other programs that take memory, or choose a smaller quantisation in the model manager."),
+            SongError::EngineFatal(line) => f.write_str(line),
+            SongError::EngineFailed => write!(f, "{ENGINE} reported a failed job; its log has the reason."),
+            SongError::EngineUnreachable(detail) => write!(f, "{ENGINE} stopped answering about this job: {detail}"),
+            SongError::ImportFailed(detail) => write!(f, "{ENGINE} completed the job, but the studio could not safely import its result: {detail}"),
+            SongError::OpenRouterNoModel => f.write_str("OpenRouter music requires a selected model from the refreshed catalog"),
+            SongError::OpenRouterCatalogStale => f.write_str("Refresh the OpenRouter catalog before starting cloud music generation"),
+            SongError::OpenRouterFailed(detail) => write!(f, "OpenRouter music generation failed: {detail}"),
+        }
+    }
+}
+
+impl From<String> for SongError {
+    fn from(text: String) -> Self {
+        SongError::Raw(text)
+    }
+}
+
+impl From<&str> for SongError {
+    fn from(text: &str) -> Self {
+        SongError::Raw(text.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One reason of each code. The `match` without a wildcard does not let a new kind be forgotten here.
+    fn one_of_each() -> Vec<SongError> {
+        let all = vec![
+            SongError::Raw("x".into()),
+            SongError::PromptTooLong { tokens: 5100, limit: 5000 },
+            SongError::KvCacheShort { needed: 2275, tokens: 773, frames: 1500, seconds: 60, max_seq: 512, suggest: 2560 },
+            SongError::TrainingOnCard,
+            SongError::LostVram,
+            SongError::LostRam,
+            SongError::LostDevice(Some("x".into())),
+            SongError::LostDevice(None),
+            SongError::LostAtLine("x".into()),
+            SongError::Lost,
+            SongError::LoadVram,
+            SongError::LoadRam,
+            SongError::EngineFatal("x".into()),
+            SongError::EngineFailed,
+            SongError::EngineUnreachable("x".into()),
+            SongError::ImportFailed("x".into()),
+            SongError::OpenRouterNoModel,
+            SongError::OpenRouterCatalogStale,
+            SongError::OpenRouterFailed("x".into()),
+        ];
+        for error in &all {
+            match error {
+                SongError::Raw(_)
+                | SongError::PromptTooLong { .. }
+                | SongError::KvCacheShort { .. }
+                | SongError::TrainingOnCard
+                | SongError::LostVram
+                | SongError::LostRam
+                | SongError::LostDevice(_)
+                | SongError::LostAtLine(_)
+                | SongError::Lost
+                | SongError::LoadVram
+                | SongError::LoadRam
+                | SongError::EngineFatal(_)
+                | SongError::EngineFailed
+                | SongError::EngineUnreachable(_)
+                | SongError::ImportFailed(_)
+                | SongError::OpenRouterNoModel
+                | SongError::OpenRouterCatalogStale
+                | SongError::OpenRouterFailed(_) => {}
+            }
+        }
+        all
+    }
+
+    /// Each code is translated into every language of the window: a code without a translation fails here.
+    #[test]
+    fn every_code_has_a_translation_in_every_language() {
+        let dictionary = include_str!("../../../app/i18n/songErrors.ts");
+        let mut missing = Vec::new();
+        for error in one_of_each() {
+            let Some(code) = error.code() else { continue };
+            let found = dictionary.matches(&format!("\n  {code}:")).count();
+            if found != 5 {
+                missing.push(format!("{code}: {found} of 5"));
+            }
+            for key in error.params().keys() {
+                let named = dictionary.matches(&format!("{{{key}}}")).count();
+                if named == 0 {
+                    missing.push(format!("{code}: no translation uses {{{key}}}"));
+                }
+            }
+        }
+        assert!(missing.is_empty(), "without a translation: {missing:?}");
+    }
+
+    #[test]
+    fn the_english_text_stays_what_the_hub_already_groups_by() {
+        assert_eq!(
+            SongError::ImportFailed("error sending request for url (x)".into()).to_string(),
+            "mm-server completed the job, but the studio could not safely import its result: error sending request for url (x)"
+        );
+        assert_eq!(
+            SongError::LostVram.to_string(),
+            "The graphics card ran out of memory on this song and the engine restarted, so the song was lost. Choose a smaller model set in the model manager or a shorter song, and close whatever else uses the card; a card below the smallest set cannot make songs."
+        );
+        assert_eq!(SongError::EngineFatal("kv_len 773 > max_seq 512".into()).to_string(), "kv_len 773 > max_seq 512");
+        let short = SongError::KvCacheShort { needed: 1575, tokens: 73, frames: 1500, seconds: 60, max_seq: 512, suggest: 2048 };
+        assert_eq!(short.code(), Some("kv_cache_short"));
+        assert_eq!(short.params()["suggest"], 2048);
+        assert_eq!(SongError::Raw("x".into()).code(), None);
+    }
+}

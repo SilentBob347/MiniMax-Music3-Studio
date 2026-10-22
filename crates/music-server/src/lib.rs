@@ -46,6 +46,9 @@ mod mm_result;
 mod openrouter_stream;
 mod progress;
 mod engine_log;
+mod song_errors;
+
+use song_errors::SongError;
 
 use std::{collections::HashMap, env, fs, net::SocketAddr, path::PathBuf, sync::Arc};
 use anyhow::Context;
@@ -287,9 +290,30 @@ struct MusicJob {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     songs: Vec<CompletedSong>,
     message: String,
+    /// What a failed job's message says, as a code and fields the window translates (`song_errors`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    params: Option<serde_json::Map<String, Value>>,
     /// The playlist the made songs go into, a project the user works in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     playlist_id: Option<String>,
+}
+
+impl MusicJob {
+    /// Ends the job as failed, for this reason.
+    fn fail(&mut self, error: SongError) {
+        self.status = MusicJobStatus::Failed;
+        self.phase = MusicJobPhase::Failed;
+        self.say(error);
+    }
+
+    /// The message and, for a reason the window translates, its code and fields.
+    fn say(&mut self, error: SongError) {
+        self.code = error.code();
+        self.params = self.code.map(|_| error.params());
+        self.message = error.to_string();
+    }
 }
 
 fn job_status_name(status: &MusicJobStatus) -> &'static str {
@@ -344,6 +368,8 @@ fn job_from_stored(stored: library::StoredJob, status: MusicJobStatus, message: 
         song: None,
         songs: vec![],
         message,
+        code: None,
+        params: None,
         playlist_id: stored.playlist_id,
     }
 }
@@ -4653,22 +4679,16 @@ fn previous_run(tail: &[String]) -> String {
 
 /// Why a song was lost with an engine that restarted during it, from the log
 /// of the run that ended.
-fn lost_job_reason(log: &str) -> String {
+fn lost_job_reason(log: &str) -> SongError {
     let lowered = log.to_lowercase();
     if describes_exhausted_memory(&lowered) {
-        "The graphics card ran out of memory on this song and the engine restarted, so the song was lost. Choose a smaller model set in the model manager or a shorter song, and close whatever else uses the card; a card below the smallest set cannot make songs.".into()
+        SongError::LostVram
     } else if describes_exhausted_ram(&lowered) {
-        "The computer ran out of memory (RAM) on this song and the engine restarted, so the song was lost. Close other programs that take memory, or choose a smaller model set in the model manager or a shorter song.".into()
+        SongError::LostRam
     } else if describes_device_failure(&lowered) {
-        match device_error_line(log) {
-            Some(error) => format!("The graphics card failed during this song ({error}) and the engine restarted, so the song was lost. The engine log is in Settings, Engine."),
-            None => "The graphics card failed during this song (a CUDA or driver error) and the engine restarted, so the song was lost. The engine log is in Settings, Engine.".into(),
-        }
+        SongError::LostDevice(device_error_line(log))
     } else {
-        match last_engine_line(log) {
-            Some(line) => format!("The engine stopped during this song and restarted, so the song was lost; its last line was {line}. The engine log is in Settings, Engine."),
-            None => "The engine stopped during this song and restarted, so the song was lost. The engine log is in Settings, Engine.".into(),
-        }
+        last_engine_line(log).map_or(SongError::Lost, SongError::LostAtLine)
     }
 }
 
@@ -7702,19 +7722,18 @@ async fn free_the_card_for_the_engine(state: &AppState) {
 /// A card that ran out of memory says so in the log and then the process is
 /// gone; the studio saw only a refused connection, and told the user to
 /// download models that were already on disk.
-fn engine_failure_reason() -> Option<String> {
+fn engine_failure_reason() -> Option<SongError> {
     let tail = music_engine::mm_server::startup_log_tail(80).join("\n").to_lowercase();
     if describes_exhausted_memory(&tail) {
-        return Some("The graphics card ran out of memory while the engine was loading the models. Choose a smaller quantisation in the model manager, or close whatever else is using the card - the writing assistant holds several gigabytes of its own.".to_string());
+        return Some(SongError::LoadVram);
     }
-    describes_exhausted_ram(&tail)
-        .then(|| "The computer ran out of memory (RAM) while the engine was loading the models. Close other programs that take memory, or choose a smaller quantisation in the model manager.".to_string())
+    describes_exhausted_ram(&tail).then_some(SongError::LoadRam)
 }
 
 /// Why the engine gave this job up: running out of memory, else its own last
 /// FATAL line after the job's start.
-fn job_failure_reason(state: &AppState, job_id: &str) -> Option<String> {
-    engine_failure_reason().or_else(|| first_fatal(&state.engine_log.lines()?, job_id))
+fn job_failure_reason(state: &AppState, job_id: &str) -> Option<SongError> {
+    engine_failure_reason().or_else(|| first_fatal(&state.engine_log.lines()?, job_id).map(SongError::EngineFatal))
 }
 
 /// The first FATAL line after the job's own start, without the stage tag: the
@@ -7768,7 +7787,7 @@ async fn submit_music_job(state: AppState, mut request: CreateMusicJobRequest, a
     }
 
     if state.training.active_run().await.is_some() {
-        return (StatusCode::CONFLICT, Json(failed_request_job(request, engine_id, "a LoRA is training on the card; make songs once it finishes".into())));
+        return (StatusCode::CONFLICT, Json(failed_request_job(request, engine_id, SongError::TrainingOnCard)));
     }
     // an adapter named without strengths starts where the create page starts it
     let slot_ids: Vec<&str> = music_engine::mm_server::ADAPTER_SLOTS.iter().map(|slot| slot.id).collect();
@@ -7817,6 +7836,8 @@ async fn submit_music_job(state: AppState, mut request: CreateMusicJobRequest, a
                 song: None,
                 songs: vec![],
                 message: "Submitted to mm-server. Progress is phase-only: queued, running, completed, failed, or cancelled.".into(),
+                code: None,
+                params: None,
                 playlist_id: request.playlist_id.clone(),
             };
             state.jobs.write().await.insert(job.id.clone(), job.clone());
@@ -7921,7 +7942,7 @@ async fn submit_replay_job(state: AppState, request: ReplayMusicJobRequest, atte
         let tokens = state.music_server.tokenize(&caption, &lyrics).await.map_err(|error| api_error(StatusCode::SERVICE_UNAVAILABLE, format!("the engine did not count the prompt: {error:#}")))?;
         let frames = prompt_check::replay_frames(synth_request.get("audio_codes").and_then(Value::as_str).unwrap_or_default());
         if let Some(refusal) = prompt_check::kv_cache_shortfall(tokens, frames, max_seq) {
-            return Err(api_error(StatusCode::BAD_REQUEST, refusal));
+            return Err(api_error(StatusCode::BAD_REQUEST, refusal.to_string()));
         }
     }
     let remote = state
@@ -7935,7 +7956,7 @@ async fn submit_replay_job(state: AppState, request: ReplayMusicJobRequest, atte
         id: remote.id, client_ref: request.client_ref.clone(), submitted_at: unix_millis(), engine_id: PRIMARY_MUSIC_ENGINE_ID.into(), title: source_title, status: MusicJobStatus::Queued,
         dispatch: MusicJobDispatch::Local, phase: MusicJobPhase::Queued, caption, lyrics,
         duration_seconds: synth_request.get("duration").and_then(Value::as_f64).unwrap_or_default(), generation_settings: synth_request,
-        song: None, songs: vec![], message: "Submitted replay synthesis to mm-server. audio_codes are present, so the autoregressive LM stage is skipped.".into(), playlist_id: None,
+        song: None, songs: vec![], message: "Submitted replay synthesis to mm-server. audio_codes are present, so the autoregressive LM stage is skipped.".into(), code: None, params: None, playlist_id: None,
     };
     if let Some(song_id) = &request.song_id {
         if let Some(original) = state.library.get_song(song_id).map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))? {
@@ -7978,12 +7999,12 @@ async fn create_openrouter_music_job(state: AppState, request: CreateMusicJobReq
     let engine_id = "openrouter".to_owned();
     let model_id = match model_id.filter(|model| !model.trim().is_empty()) {
         Some(model) => model,
-        None => return (StatusCode::BAD_REQUEST, Json(failed_request_job(request, engine_id, "OpenRouter music requires a selected model from the refreshed catalog".into()))),
+        None => return (StatusCode::BAD_REQUEST, Json(failed_request_job(request, engine_id, SongError::OpenRouterNoModel))),
     };
     let prompt = openrouter_music_prompt(&request);
     let catalog = match state.openrouter_catalog.read().await.catalog.clone() {
         Some(catalog) => catalog,
-        None => return (StatusCode::BAD_REQUEST, Json(failed_request_job(request, engine_id, "Refresh the OpenRouter catalog before starting cloud music generation".into()))),
+        None => return (StatusCode::BAD_REQUEST, Json(failed_request_job(request, engine_id, SongError::OpenRouterCatalogStale))),
     };
     let stream_request = match providers::openrouter::music_stream_request_for(&catalog, &model_id, &prompt) {
         Ok(request) => request,
@@ -7995,6 +8016,8 @@ async fn create_openrouter_music_job(state: AppState, request: CreateMusicJobReq
         dispatch: MusicJobDispatch::OpenRouter, phase: MusicJobPhase::Running, caption: request.caption, lyrics: request.lyrics,
         duration_seconds: request.duration_seconds, generation_settings: stream_request.request.body.clone(), song: None, songs: vec![],
         message: "OpenRouter music stream started; the completed audio will be imported into the studio library.".into(),
+        code: None,
+        params: None,
         playlist_id: request.playlist_id.clone(),
     };
     state.jobs.write().await.insert(job.id.clone(), job.clone());
@@ -8054,7 +8077,7 @@ async fn run_openrouter_music_generation(state: AppState, job_id: String, stream
             }
             job.songs = vec![song];
         }
-        Err(error) => { job.status = MusicJobStatus::Failed; job.phase = MusicJobPhase::Failed; job.message = format!("OpenRouter music generation failed: {error}"); }
+        Err(error) => { job.fail(SongError::OpenRouterFailed(error.to_string())); }
     }
 }
 
@@ -8241,9 +8264,7 @@ async fn follow_job(state: &AppState, job_id: &str, started: &mut Option<Option<
                     unreachable += 1;
                     if forgotten || unreachable >= 60 {
                         if let Some(job) = state.jobs.write().await.get_mut(&job_id) {
-                            job.status = MusicJobStatus::Failed;
-                            job.phase = MusicJobPhase::Failed;
-                            job.message = if forgotten { lost_job_reason(&previous_run_log()) } else { format!("mm-server stopped answering about this job: {error}") };
+                            job.fail(if forgotten { lost_job_reason(&previous_run_log()) } else { SongError::EngineUnreachable(error.to_string()) });
                         }
                         return;
                     }
@@ -8270,11 +8291,7 @@ async fn follow_job(state: &AppState, job_id: &str, started: &mut Option<Option<
                         }
                         job.songs = songs;
                     }
-                    Err(error) => {
-                        job.status = MusicJobStatus::Failed;
-                        job.phase = MusicJobPhase::Failed;
-                        job.message = format!("mm-server completed the job, but the studio could not safely import its result: {error:#}");
-                    }
+                    Err(error) => job.fail(SongError::ImportFailed(format!("{error:#}"))),
                 }
                 return;
             }
@@ -8814,11 +8831,14 @@ fn queued_not_configured_job(request: CreateMusicJobRequest, engine_id: String) 
         song: None,
         songs: vec![],
         message: "The selected local music engine is not configured; this job remains queued and no inference has started.".into(),
+        code: None,
+        params: None,
         playlist_id: None,
     }
 }
 
-fn failed_request_job(request: CreateMusicJobRequest, engine_id: String, error: String) -> MusicJob {
+fn failed_request_job(request: CreateMusicJobRequest, engine_id: String, error: impl Into<SongError>) -> MusicJob {
+    let error = error.into();
     MusicJob {
         derived: None,
         cover_prompt: None,
@@ -8836,7 +8856,9 @@ fn failed_request_job(request: CreateMusicJobRequest, engine_id: String, error: 
         generation_settings: serde_json::Value::Null,
         song: None,
         songs: vec![],
-        message: error,
+        message: error.to_string(),
+        code: error.code(),
+        params: error.code().map(|_| error.params()),
         playlist_id: None,
     }
 }
@@ -8845,7 +8867,7 @@ fn uuid_suffix() -> String {
     uuid::Uuid::now_v7().to_string()
 }
 
-fn apply_remote_status(job: &mut MusicJob, remote_status: &str, failure: Option<String>) {
+fn apply_remote_status(job: &mut MusicJob, remote_status: &str, failure: Option<SongError>) {
     match remote_status {
         "queued" => {
             job.status = MusicJobStatus::Queued;
@@ -8862,11 +8884,7 @@ fn apply_remote_status(job: &mut MusicJob, remote_status: &str, failure: Option<
             job.phase = MusicJobPhase::Completed;
             job.message = "mm-server completed this job; fetch its result from mm-server using the job id.".into();
         }
-        "failed" => {
-            job.status = MusicJobStatus::Failed;
-            job.phase = MusicJobPhase::Failed;
-            job.message = failure.unwrap_or_else(|| "mm-server reported a failed job; its log has the reason.".into());
-        }
+        "failed" => job.fail(failure.unwrap_or(SongError::EngineFailed)),
         "cancelled" => {
             job.status = MusicJobStatus::Cancelled;
             job.dispatch = MusicJobDispatch::Cancelled;
@@ -8943,11 +8961,11 @@ mod tests {
 
     #[test]
     fn a_lost_song_is_told_why_from_the_run_that_ended() {
-        assert!(lost_job_reason("ggml_backend_cuda_buffer_type_alloc_buffer: allocating 2048 MB on device 0: cudaMalloc failed: out of memory").contains("ran out of memory"));
-        assert!(lost_job_reason("[NAR] Step 3/16\nCUDA error: an illegal memory access was encountered\n  current device: 0").contains("(CUDA error: an illegal memory access was encountered)"));
-        assert!(lost_job_reason("ggml_cuda_compute_forward: MUL_MAT failed").contains("CUDA or driver error"));
-        assert!(lost_job_reason("[NAR] Step 2/16, 87844 ms\n[NAR] Step 3/16\n[studio] the engine stopped answering").contains("its last line was [NAR] Step 3/16."));
-        assert!(lost_job_reason("[Server] listening").contains("stopped during this song"));
+        assert!(lost_job_reason("ggml_backend_cuda_buffer_type_alloc_buffer: allocating 2048 MB on device 0: cudaMalloc failed: out of memory").to_string().contains("ran out of memory"));
+        assert!(lost_job_reason("[NAR] Step 3/16\nCUDA error: an illegal memory access was encountered\n  current device: 0").to_string().contains("(CUDA error: an illegal memory access was encountered)"));
+        assert!(lost_job_reason("ggml_cuda_compute_forward: MUL_MAT failed").to_string().contains("CUDA or driver error"));
+        assert!(lost_job_reason("[NAR] Step 2/16, 87844 ms\n[NAR] Step 3/16\n[studio] the engine stopped answering").to_string().contains("its last line was [NAR] Step 3/16."));
+        assert!(lost_job_reason("[Server] listening").to_string().contains("stopped during this song"));
     }
 
     #[test]
@@ -8955,7 +8973,7 @@ mod tests {
         let lines = |text: &str| text.lines().map(str::to_owned).collect::<Vec<_>>();
         let ended = lines("[AR] Frame 1200/1500\n[studio] ---- starting mm-server ----\n[Server] Listening on 127.0.0.1:8086");
         assert_eq!(previous_run(&ended), "[AR] Frame 1200/1500");
-        assert!(lost_job_reason(&previous_run(&ended)).contains("its last line was [AR] Frame 1200/1500."));
+        assert!(lost_job_reason(&previous_run(&ended)).to_string().contains("its last line was [AR] Frame 1200/1500."));
         let both = lines("[studio] ---- starting mm-server ----\n[Server] Job a: {\n[studio] ---- starting mm-server ----\n[Server] Listening on 127.0.0.1:8086");
         assert_eq!(previous_run(&both), "[studio] ---- starting mm-server ----\n[Server] Job a: {");
     }
@@ -8977,11 +8995,11 @@ mod tests {
     #[test]
     fn the_window_mark_comes_back_on_the_job() {
         let request: CreateMusicJobRequest = serde_json::from_value(serde_json::json!({ "caption": "synth-pop", "lyrics": "[Verse]", "duration_seconds": 60.0, "client_ref": "temp_1" })).unwrap();
-        let job = failed_request_job(request, "engine".into(), "x".into());
+        let job = failed_request_job(request, "engine".into(), "x");
         assert_eq!(serde_json::to_value(&job).unwrap()["client_ref"], "temp_1");
 
         let agent: CreateMusicJobRequest = serde_json::from_value(serde_json::json!({ "caption": "synth-pop", "lyrics": "[Verse]", "duration_seconds": 60.0 })).unwrap();
-        let job = failed_request_job(agent, "engine".into(), "x".into());
+        let job = failed_request_job(agent, "engine".into(), "x");
         assert!(serde_json::to_value(&job).unwrap().get("client_ref").is_none());
     }
 
@@ -9179,7 +9197,7 @@ mod tests {
     #[test]
     fn a_failed_host_allocation_names_the_computer_s_memory_not_the_card() {
         let log = "[AR] Frame 1200/1500\nterminate called after throwing an instance of 'std::bad_alloc'\n  what():  std::bad_alloc";
-        let reason = lost_job_reason(log);
+        let reason = lost_job_reason(log).to_string();
         assert!(reason.contains("ran out of memory (RAM)") && !reason.contains("graphics card"), "{reason}");
         assert!(!describes_device_failure(&log.to_lowercase()));
     }
