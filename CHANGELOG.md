@@ -16,6 +16,10 @@ Windows build.
 - **Several songs at once no longer risk a graphics card failure**: the flash attention kernel that skips masked keys read past its mask for the second song of a batch (in YuE2 Studio 3.7.0 the most frequent failure, "CUDA error: an illegal memory access"); the engine now reads the one mask the songs share.
 - **Karaoke recognition no longer closes the studio on processors without AVX-512**: the transcribe.cpp engine of 3.7.0 was built for the processor it was built on and used AVX-512 instructions, so on most Intel and older AMD processors the first karaoke stopped the studio without a word. The engine is now built for every x86-64 processor with AVX2 (Intel since 2013, AMD since 2017), as fast as before, and on a processor without AVX2 the studio says so instead of closing.- **Style by ear on macOS and Linux** ([YuE2 Studio #138](https://github.com/timoncool/YuE2-Studio/issues/138)): the captioner was only published as a Windows build, so the download said "is a Windows build and is not available on this platform yet". The Mac app and the Linux packages now carry their own captioner, built with the MIDI transcriber.
 
+### Changed
+
+- **Engine updated from minimaxmusic.cpp upstream**: the latest ggml and the --device choice of the compute device; our fixes stay on top.
+
 ## 2026-10-21 — 3.7.0
 
 ### Added
