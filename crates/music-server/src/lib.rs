@@ -1816,12 +1816,16 @@ async fn separation_status(State(state): State<AppState>) -> Json<Value> {
     let runtime = state.lyrics_sync.onnxruntime_library();
     let (engine, runtime_choice) = { let config = state.separation_config.read().await; (config.engine, config.runtime) };
     let card = lyrics_sync::OnnxFlavour::Auto.card().filter(|card| separates_on(*card));
+    let on_card = roformer_on_card(&state, runtime_choice);
     let model = match engine {
+        separation::Engine::Roformer if state.separator.downloader().is_installed(&separation::ROFORMER_MODEL) => {
+            separation::Separator::roformer_engine(on_card).unwrap_or(&separation::ROFORMER_MODEL)
+        }
         separation::Engine::Roformer => &separation::ROFORMER_MODEL,
         separation::Engine::Htdemucs => &separation::MODEL,
     };
     let model_installed = match engine {
-        separation::Engine::Roformer => state.separator.roformer_installed(roformer_on_card(&state, runtime_choice)),
+        separation::Engine::Roformer => state.separator.roformer_installed(on_card),
         separation::Engine::Htdemucs => state.separator.is_installed(),
     };
     Json(serde_json::json!({
@@ -1870,6 +1874,9 @@ async fn separation_status(State(state): State<AppState>) -> Json<Value> {
 /// Fetches the separation model. Nothing here downloads on its own; this is the
 /// button, and it also brings the runtime if karaoke has not already.
 async fn install_separation_model(State(state): State<AppState>) -> Result<Json<Value>, (StatusCode, Json<ApiError>)> {
+    if state.separation_config.read().await.engine == separation::Engine::Roformer {
+        return install_separation_asset(State(state), Json(InstallSeparationAssetRequest { asset_id: "roformer".into() })).await;
+    }
     let separator = state.separator.clone();
     let sync = state.lyrics_sync.clone();
     tokio::spawn(async move {
