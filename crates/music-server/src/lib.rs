@@ -4586,6 +4586,13 @@ async fn restart_engine(state: &AppState) -> Result<(), String> {
     if options.backend == music_engine::mm_server::ComputeBackend::Cuda && cuda_build::current().is_none() {
         return Err(cuda_build::UNSUPPORTED.into());
     }
+    if let Some(problem) = missing_chosen_card(options.gpu, &cuda_build::nvidia_cards()) {
+        // the supervisor asks again every few seconds: the log gets the reason once
+        if music_engine::mm_server::startup_log_tail(1).last() != Some(&format!("[studio] {problem}")) {
+            music_engine::mm_server::note_in_log(&problem);
+        }
+        return Err(problem);
+    }
     let chain = options.device_chain(&state.failed_devices.read().await);
     let mut last_error = String::new();
     for (index, device) in chain.iter().copied().enumerate() {
@@ -4652,6 +4659,23 @@ fn device_name(device: music_engine::mm_server::ComputeBackend) -> &'static str 
         ComputeBackend::Vulkan => "Vulkan",
         ComputeBackend::Cpu => "the processor",
     }
+}
+
+/// Why the engine cannot start on the card the settings name: a card that is not in this computer would leave CUDA
+/// with no device at all, and the engine would go to the processor without a word.
+fn missing_chosen_card(chosen: Option<u32>, cards: &[(u32, String, f64)]) -> Option<String> {
+    let index = chosen?;
+    if cards.iter().any(|(number, ..)| *number == index) {
+        return None;
+    }
+    let present = if cards.is_empty() {
+        "nvidia-smi lists no NVIDIA card".to_string()
+    } else {
+        format!("nvidia-smi lists {}", cards.iter().map(|(number, name, _)| format!("{number}: {name}")).collect::<Vec<_>>().join(", "))
+    };
+    Some(format!(
+        "the graphics card chosen in Settings - Local engine (number {index}) is not in this computer ({present}); choose another card or Auto there"
+    ))
 }
 
 /// The engine log since the last start, where the reason a run ended is.
@@ -5303,6 +5327,14 @@ async fn compose_setup_status(state: &AppState, manager_status: model_manager::M
             Value::Bool(state.music_server.health().await),
         );
         fields.insert("engine_id".into(), Value::String(PRIMARY_MUSIC_ENGINE_ID.into()));
+        // what the running engine computes on, so a run on the processor is seen in the window
+        fields.insert("engine_device".into(), serde_json::to_value(*state.active_device.read().await).unwrap_or(Value::Null));
+        let chosen_card = state.engine_options.read().await.gpu;
+        let problem = match chosen_card {
+            Some(_) => tokio::task::spawn_blocking(move || missing_chosen_card(chosen_card, &cuda_build::nvidia_cards())).await.ok().flatten(),
+            None => None,
+        };
+        fields.insert("engine_problem".into(), serde_json::to_value(problem).unwrap_or(Value::Null));
         fields.insert("selected_profile_id".into(), serde_json::to_value(selected_profile_id).unwrap_or(Value::Null));
         fields.insert("selected_component_ids".into(), serde_json::to_value(selected_component_ids).unwrap_or(Value::Null));
         fields.insert("hardware".into(), serde_json::to_value(presets::hardware()).unwrap_or(Value::Null));
@@ -7016,6 +7048,7 @@ fn midi_device(options: &EngineOptions) -> &'static str {
 /// runs it, following its notes as they come. Returns how many it heard.
 async fn transcribe_to_midi(state: &AppState, size: &'static midi::Size, audio: &std::path::Path, output: &std::path::Path) -> anyhow::Result<usize> {
     use tokio::io::AsyncBufReadExt;
+    dub_tcpp::cpu_floor("Audio to MIDI").map_err(anyhow::Error::msg)?;
     let missing = state.midi.missing(size);
     if !missing.is_empty() {
         // the first use fetches what the tool needs, as the karaoke recogniser does
@@ -8966,6 +8999,16 @@ mod tests {
         assert!(lost_job_reason("ggml_cuda_compute_forward: MUL_MAT failed").to_string().contains("CUDA or driver error"));
         assert!(lost_job_reason("[NAR] Step 2/16, 87844 ms\n[NAR] Step 3/16\n[studio] the engine stopped answering").to_string().contains("its last line was [NAR] Step 3/16."));
         assert!(lost_job_reason("[Server] listening").to_string().contains("stopped during this song"));
+    }
+
+    #[test]
+    fn a_chosen_card_that_is_not_there_is_said_not_left_to_the_processor() {
+        let cards = vec![(0, "NVIDIA GeForce RTX 4090".to_string(), 24.0)];
+        assert_eq!(missing_chosen_card(None, &cards), None);
+        assert_eq!(missing_chosen_card(Some(0), &cards), None);
+        let missing = missing_chosen_card(Some(1), &cards).expect("card 1 is not there");
+        assert!(missing.contains("number 1") && missing.contains("0: NVIDIA GeForce RTX 4090"), "{missing}");
+        assert!(missing_chosen_card(Some(0), &[]).expect("no card at all").contains("lists no NVIDIA card"));
     }
 
     #[test]

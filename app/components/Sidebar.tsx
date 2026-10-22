@@ -24,6 +24,8 @@ type NativeSetupStatus = {
   ready: boolean;
   engine_ready: boolean;
   engine_id: string;
+  /** What the running engine computes on: `cpu` is said in the status, as no card is used. */
+  engine_device?: 'auto' | 'cuda' | 'vulkan' | 'cpu' | null;
   selected_profile_id?: string | null;
   selected_component_ids?: string[] | null;
 };
@@ -48,7 +50,7 @@ const SystemWidget: React.FC<{ isOpen?: boolean }> = ({ isOpen }) => {
   const engineReady = setup?.engine_ready === true;
   const modelReady = setup?.ready === true;
   const profile = setup?.selected_profile_id || (setup?.selected_component_ids?.length ? t('customSet') : t('noProfile'));
-  const engineLabel = unreachable ? t('engineUnavailable') : engineReady ? t('engineReachable') : t('engineStarting');
+  const engineLabel = unreachable ? t('engineUnavailable') : engineReady ? (setup?.engine_device === 'cpu' ? t('engineOnProcessor') : t('engineReachable')) : t('engineStarting');
   const modelLabel = modelReady ? `${t('profileReady')}: ${profile}` : t('profileNotInstalled');
 
   if (!isOpen) {

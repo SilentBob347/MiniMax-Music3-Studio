@@ -175,7 +175,9 @@ pub async fn ensure_vc_runtime() -> Result<()> {
         return Ok(());
     }
     let installer = std::env::temp_dir().join("vc_redist.x64.exe");
-    let bytes = reqwest::get(VC_REDIST_URL)
+    let bytes = crate::net::download_client()
+        .get(VC_REDIST_URL)
+        .send()
         .await
         .context("download the Visual C++ redistributable")?
         .error_for_status()
