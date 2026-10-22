@@ -4449,8 +4449,10 @@ async fn update_engine_options(
 /// Makes the engine find every model and LoRA on disk again. It reads its
 /// folders once, when it starts, so a file that arrived later - a download, a
 /// file put there by hand - is found by restarting it. New songs wait for it,
-/// and the songs already on the engine are finished first: the engine keeps no
-/// list of its work, so each one the studio sent it is asked after.
+/// and the songs already on the engine are finished first: a restart empties the
+/// engine's job table, its queue and the results not yet fetched, so it waits
+/// until the studio has taken every song it sent, not only until the engine
+/// stops rendering.
 async fn rescan_resources(state: &AppState) -> Result<Value, String> {
     let _rescan = state.engine_use.write().await;
     // a training run or a dataset preparation holds the card; the engine finds
@@ -4460,23 +4462,15 @@ async fn rescan_resources(state: &AppState) -> Result<Value, String> {
         return Ok(serde_json::json!({ "restarted": false, "message": "The engine is not running; it finds every model and LoRA when it starts." }));
     }
     loop {
-        let sent: Vec<String> = state
+        let in_flight = state
             .jobs
             .read()
             .await
             .values()
-            .filter(|job| matches!(job.dispatch, MusicJobDispatch::Local) && matches!(job.status, MusicJobStatus::Queued | MusicJobStatus::Running))
-            .map(|job| job.id.clone())
-            .collect();
-        let mut rendering = false;
-        for id in &sent {
-            if state.music_server.job(id).await.is_ok_and(|remote| remote.status == "running") {
-                rendering = true;
-                break;
-            }
-        }
-        // an engine that stopped answering has nothing left to finish
-        if !rendering || !state.music_server.health().await {
+            .any(|job| matches!(job.dispatch, MusicJobDispatch::Local) && matches!(job.status, MusicJobStatus::Queued | MusicJobStatus::Running));
+        // an engine that is gone has nothing left to finish; one inside a long step answers late but is still at work
+        let alive = state.music_server.health().await || state.engine.lock().await.as_mut().is_some_and(|engine| engine.process_alive());
+        if !in_flight || !alive {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -7775,7 +7769,12 @@ async fn submit_music_job(state: AppState, mut request: CreateMusicJobRequest, a
         Ok(tokens) if tokens > prompt_check::MAX_PROMPT_TOKENS => {
             return (StatusCode::BAD_REQUEST, Json(failed_request_job(request, engine_id, prompt_check::too_long_message(tokens))));
         }
-        Ok(_) => {}
+        Ok(tokens) => {
+            let max_seq = state.engine_options.read().await.max_seq;
+            if let Some(refusal) = prompt_check::kv_cache_shortfall(tokens, prompt_check::song_frames(request.duration_seconds), max_seq) {
+                return (StatusCode::BAD_REQUEST, Json(failed_request_job(request, engine_id, refusal)));
+            }
+        }
         // the engine enforces the same budget at submit; only the friendlier message is lost
         Err(error) => eprintln!("[ERROR] the prompt length was not counted before submitting: {error:#}"),
     }
@@ -7898,6 +7897,14 @@ async fn submit_replay_job(state: AppState, request: ReplayMusicJobRequest, atte
     let caption = synth_request.get("caption").and_then(Value::as_str).unwrap_or_default().to_owned();
     let lyrics = synth_request.get("lyrics").and_then(Value::as_str).unwrap_or_default().to_owned();
     let _using = state.engine_use.read().await;
+    let max_seq = state.engine_options.read().await.max_seq;
+    if max_seq.is_some() {
+        let tokens = state.music_server.tokenize(&caption, &lyrics).await.map_err(|error| api_error(StatusCode::SERVICE_UNAVAILABLE, format!("the engine did not count the prompt: {error:#}")))?;
+        let frames = prompt_check::replay_frames(synth_request.get("audio_codes").and_then(Value::as_str).unwrap_or_default());
+        if let Some(refusal) = prompt_check::kv_cache_shortfall(tokens, frames, max_seq) {
+            return Err(api_error(StatusCode::BAD_REQUEST, refusal));
+        }
+    }
     let remote = state
         .music_server
         .submit(engine_submission(&synth_request))
@@ -8247,7 +8254,7 @@ async fn follow_job(state: &AppState, job_id: &str, started: &mut Option<Option<
                     Err(error) => {
                         job.status = MusicJobStatus::Failed;
                         job.phase = MusicJobPhase::Failed;
-                        job.message = format!("mm-server completed the job, but the studio could not safely import its result: {error}");
+                        job.message = format!("mm-server completed the job, but the studio could not safely import its result: {error:#}");
                     }
                 }
                 return;

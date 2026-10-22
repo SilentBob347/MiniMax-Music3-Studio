@@ -107,9 +107,49 @@ pub fn too_long_message(tokens: u64) -> String {
     )
 }
 
+/// The engine's language model writes one cache position per frame, 25 frames a second, at most 9000.
+const FRAME_RATE: f64 = 25.0;
+const MAX_FRAMES: u64 = 9000;
+
+/// The refusal of a song that does not fit the language model's cache the engine was started with
+/// (`--max-seq`): a prompt longer than the cache stops the engine at its first step, and a song longer
+/// than what is left after the prompt is cut short.
+pub fn kv_cache_shortfall(tokens: u64, frames: u64, max_seq: Option<u32>) -> Option<String> {
+    let max_seq = u64::from(max_seq?);
+    let needed = tokens + frames + 2;
+    (needed > max_seq).then(|| {
+        format!(
+            "This song needs {needed} places in the language model's cache ({tokens} tokens of caption and lyrics and {frames} frames for {:.0} s of music), but the engine settings limit that cache (LM KV cache, --max-seq) to {max_seq}. Set it to {} or more, or clear the field to use the model's full length.",
+            frames as f64 / FRAME_RATE,
+            needed.div_ceil(512) * 512
+        )
+    })
+}
+
+/// The frames the language model writes for a song of this length.
+pub fn song_frames(duration_seconds: f64) -> u64 {
+    ((duration_seconds.max(0.0) * FRAME_RATE) as u64).min(MAX_FRAMES)
+}
+
+/// The frames a re-render replays from its codes: 8 codes a frame, the first frame only seeding the model.
+pub fn replay_frames(audio_codes: &str) -> u64 {
+    let codes = audio_codes.split(',').filter(|code| !code.trim().is_empty()).count() as u64;
+    (codes / 8).saturating_sub(1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_song_over_the_set_cache_is_refused_with_the_size_it_needs() {
+        assert_eq!(kv_cache_shortfall(773, song_frames(60.0), None), None);
+        assert_eq!(kv_cache_shortfall(300, song_frames(8.0), Some(512)), None);
+        let refused = kv_cache_shortfall(773, song_frames(60.0), Some(512)).expect("over the cache");
+        assert!(refused.contains("2275 places") && refused.contains("for 60 s") && refused.contains("to 512") && refused.contains("2560 or more"), "{refused}");
+        assert_eq!(song_frames(1000.0), 9000, "frames stop at the model's cap");
+        assert_eq!(replay_frames(&vec!["7"; 24].join(",")), 2);
+    }
 
     #[test]
     fn words_after_a_section_tag_are_found_where_the_engine_drops_them() {
