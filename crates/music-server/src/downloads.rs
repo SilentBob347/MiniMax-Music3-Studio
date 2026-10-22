@@ -178,7 +178,7 @@ impl Downloader {
 
     /// Where the address a runtime was fetched from is kept: beside a single file, inside the folder an archive
     /// unpacked into.
-    fn source_record(&self, asset: &Asset) -> PathBuf {
+    pub(crate) fn source_record(&self, asset: &Asset) -> PathBuf {
         if !asset.pick.is_empty() || asset.unzip_into.is_some() {
             let folder = if asset.pick.is_empty() { self.runtime_dir(asset.unzip_into.unwrap_or(".")) } else { self.picked_into(asset) };
             return folder.join(format!(".source-{}", asset.id));

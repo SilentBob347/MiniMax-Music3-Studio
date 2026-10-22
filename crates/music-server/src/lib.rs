@@ -17,6 +17,8 @@ mod audio_pcm;
 mod legacy_text;
 mod downloads;
 mod cuda_build;
+#[cfg(all(test, windows))]
+mod dll_imports;
 mod engine_runtime;
 mod lyrics_db;
 mod mcp;

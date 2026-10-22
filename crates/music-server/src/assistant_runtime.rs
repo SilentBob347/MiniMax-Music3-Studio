@@ -459,7 +459,7 @@ impl AssistantRuntime {
     }
 
     /// Where the address a runtime was unpacked from is kept, in its own folder.
-    fn source_record(&self, asset: &Asset) -> Option<PathBuf> {
+    pub(crate) fn source_record(&self, asset: &Asset) -> Option<PathBuf> {
         asset.unzip_into.map(|flavour| self.root.join("runtime").join(flavour).join(format!(".source-{}", asset.id)))
     }
 
