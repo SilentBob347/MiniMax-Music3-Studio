@@ -2423,11 +2423,13 @@ async fn read_training(State(state): State<AppState>) -> Json<Value> {
                     Err(reason) => value["resume_refused"] = serde_json::json!(reason),
                 }
             }
-            if active.as_deref() == Some(run.id.as_str()) || run.status == training::RunStatus::Failed {
-                value["log"] = serde_json::json!(training.log_tail(&run.id, 12));
-            }
-            if active.as_deref() == Some(run.id.as_str()) {
-                value["device"] = serde_json::json!(training.run_device(&run.id));
+            let going = active.as_deref() == Some(run.id.as_str());
+            if going || run.status == training::RunStatus::Failed {
+                let (log, device) = training.log_view(&run.id, 12);
+                value["log"] = serde_json::json!(log);
+                if going {
+                    value["device"] = serde_json::json!(device);
+                }
             }
             value
         })
@@ -4632,14 +4634,19 @@ fn last_run_log() -> String {
     tail[start..].join("\n")
 }
 
-/// The engine log of the run before the current one: after a restart, the
-/// run that ended is where the reason is.
 fn previous_run_log() -> String {
-    let tail = music_engine::mm_server::startup_log_tail(600);
+    previous_run(&music_engine::mm_server::startup_log_tail(4000))
+}
+
+/// The lines before the current run's start: a long run writes hundreds of
+/// lines, so the tail may have lost where that run began, never where the
+/// current one did.
+fn previous_run(tail: &[String]) -> String {
     let starts: Vec<usize> = tail.iter().enumerate().filter(|(_, line)| line.contains("---- starting")).map(|(index, _)| index).collect();
     match starts.as_slice() {
         [.., before, last] => tail[*before..*last].join("\n"),
-        _ => tail.join("\n"),
+        [last] => tail[..*last].join("\n"),
+        [] => tail.join("\n"),
     }
 }
 
@@ -8218,7 +8225,7 @@ async fn follow_job(state: &AppState, job_id: &str, started: &mut Option<Option<
                     // job the engine answers it does not know was lost with
                     // the process that had it, and the log of that process
                     // says why.
-                    let forgotten = error.to_string().contains("404");
+                    let forgotten = error.to_string().starts_with("mm-server returned 404");
                     unreachable += 1;
                     if forgotten || unreachable >= 60 {
                         if let Some(job) = state.jobs.write().await.get_mut(&job_id) {
@@ -8929,6 +8936,16 @@ mod tests {
         assert!(lost_job_reason("ggml_cuda_compute_forward: MUL_MAT failed").contains("CUDA or driver error"));
         assert!(lost_job_reason("[NAR] Step 2/16, 87844 ms\n[NAR] Step 3/16\n[studio] the engine stopped answering").contains("its last line was [NAR] Step 3/16."));
         assert!(lost_job_reason("[Server] listening").contains("stopped during this song"));
+    }
+
+    #[test]
+    fn the_run_that_ended_is_read_even_when_its_start_left_the_tail() {
+        let lines = |text: &str| text.lines().map(str::to_owned).collect::<Vec<_>>();
+        let ended = lines("[AR] Frame 1200/1500\n[studio] ---- starting mm-server ----\n[Server] Listening on 127.0.0.1:8086");
+        assert_eq!(previous_run(&ended), "[AR] Frame 1200/1500");
+        assert!(lost_job_reason(&previous_run(&ended)).contains("its last line was [AR] Frame 1200/1500."));
+        let both = lines("[studio] ---- starting mm-server ----\n[Server] Job a: {\n[studio] ---- starting mm-server ----\n[Server] Listening on 127.0.0.1:8086");
+        assert_eq!(previous_run(&both), "[studio] ---- starting mm-server ----\n[Server] Job a: {");
     }
 
     #[test]
