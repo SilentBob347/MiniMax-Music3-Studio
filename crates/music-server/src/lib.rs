@@ -22,6 +22,7 @@ mod cuda_build;
 #[cfg(windows)]
 mod dll_imports;
 mod diagnostics;
+mod pin_sha;
 mod engine_runtime;
 mod install_record;
 mod lyrics_db;
