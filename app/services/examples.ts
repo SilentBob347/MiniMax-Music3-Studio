@@ -28,17 +28,24 @@ const SECTIONS = ['Global Metadata', 'Vocal Details', 'Arrangement'] as const;
  * nothing is silently dropped.
  */
 export function splitCaption(caption: string): { globalMetadata: string; vocalDetails: string; arrangement: string } {
-  const positions = SECTIONS.map(section => ({ section, index: caption.indexOf(section) }));
-  if (positions.some(entry => entry.index < 0)) {
+  // a heading counts only at the start of a line, so the word inside a sentence stays text
+  const found = SECTIONS.map((section, field) => {
+    const match = new RegExp(`(^|\\n)${section}`).exec(caption);
+    return { field, index: match ? match.index + match[1].length : -1 };
+  })
+    .filter(entry => entry.index >= 0)
+    .sort((a, b) => a.index - b.index);
+  if (found.length === 0) {
     return { globalMetadata: caption.trim(), vocalDetails: '', arrangement: '' };
   }
-  const slice = (from: number, to: number, heading: string) =>
-    caption.slice(from, to).replace(heading, '').trim();
-  return {
-    globalMetadata: slice(positions[0].index, positions[1].index, SECTIONS[0]),
-    vocalDetails: slice(positions[1].index, positions[2].index, SECTIONS[1]),
-    arrangement: slice(positions[2].index, caption.length, SECTIONS[2]),
-  };
+  const fields = ['', '', ''];
+  found.forEach((entry, order) => {
+    const end = order + 1 < found.length ? found[order + 1].index : caption.length;
+    fields[entry.field] = caption.slice(entry.index + SECTIONS[entry.field].length, end).trim();
+  });
+  const lead = caption.slice(0, found[0].index).trim();
+  if (lead) fields[0] = fields[0] ? `${lead}\n${fields[0]}` : lead;
+  return { globalMetadata: fields[0], vocalDetails: fields[1], arrangement: fields[2] };
 }
 
 /** Rebuilds the single caption string the engine takes from the three panes. */

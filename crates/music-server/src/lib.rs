@@ -198,6 +198,9 @@ struct CreateMusicJobRequest {
     /// Installed adapters to merge for this song, in order.
     #[serde(default)]
     adapters: Vec<AdapterUse>,
+    /// Audio codes of an earlier song, from the form's field: the engine decodes them and skips its language model.
+    #[serde(default)]
+    audio_codes: Option<String>,
 }
 
 /// One adapter of a request: its folder and a strength per engine slot. A slot
@@ -8941,6 +8944,9 @@ fn mm_request_from(request: &CreateMusicJobRequest, selected_profile_id: Option<
     if !request.adapters.is_empty() {
         body["adapters"] = Value::Array(adapter_fields(&request.adapters)?);
     }
+    if let Some(codes) = request.audio_codes.as_deref().map(str::trim).filter(|codes| !codes.is_empty()) {
+        body["audio_codes"] = Value::from(codes);
+    }
     Ok(body)
 }
 
@@ -9444,6 +9450,7 @@ mod tests {
     fn request_maps_only_confirmed_mm_server_fields() {
         let body = mm_request_from(&CreateMusicJobRequest {
             client_ref: None,
+            audio_codes: None,
             playlist_id: None,
             cover_prompt: None,
             adapters: Vec::new(),
@@ -9481,9 +9488,26 @@ mod tests {
     }
 
     #[test]
+    fn audio_codes_from_the_form_reach_the_engine() {
+        let request = |codes: Option<&str>| -> CreateMusicJobRequest {
+            serde_json::from_value(serde_json::json!({
+                "caption": "night drive", "lyrics": "[Verse]", "duration_seconds": 30.0, "audio_codes": codes,
+                "models": { "lm_model": "lm.gguf", "depth_model": "depth.gguf", "cond_model": "condition.gguf", "dit_model": "dit.gguf", "vae_model": "vocoder.gguf" },
+            }))
+            .unwrap()
+        };
+        let body = mm_request_from(&request(Some(" 1,2,3,4,5,6,7,8 ")), None, None, None).unwrap();
+        assert_eq!(body["audio_codes"], "1,2,3,4,5,6,7,8");
+        for empty in [None, Some(""), Some("  ")] {
+            assert!(mm_request_from(&request(empty), None, None, None).unwrap().get("audio_codes").is_none());
+        }
+    }
+
+    #[test]
     fn request_rejects_legacy_audio_formats_not_supported_by_mm_server() {
         let error = mm_request_from(&CreateMusicJobRequest {
             client_ref: None,
+            audio_codes: None,
             playlist_id: None,
             cover_prompt: None,
             adapters: Vec::new(),
@@ -9516,6 +9540,7 @@ mod tests {
     fn request_uses_confirmed_mm3_defaults_and_rejects_invalid_synth_batch() {
         let request = CreateMusicJobRequest {
             client_ref: None,
+            audio_codes: None,
             playlist_id: None,
             cover_prompt: None,
             adapters: Vec::new(),
@@ -9592,6 +9617,7 @@ mod tests {
         let mut job = queued_not_configured_job(
             CreateMusicJobRequest {
                 client_ref: None,
+                audio_codes: None,
                 playlist_id: None,
                 cover_prompt: None,
                 adapters: Vec::new(),
