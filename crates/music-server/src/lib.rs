@@ -7487,6 +7487,31 @@ fn adoptable_sources(components: &[model_manager::Component], root: &std::path::
         .collect()
 }
 
+/// The model files in `entries` the studio did not take, and why: one with a
+/// catalogue name but another size is another build of that file, and a GGUF
+/// the catalogue does not name is no part of the studio's sets. Files already
+/// installed and the ones taken are left out.
+fn adopt_refusals(components: &[model_manager::Component], root: &std::path::Path, entries: &[std::path::PathBuf], taken: &[std::path::PathBuf]) -> Vec<Value> {
+    entries
+        .iter()
+        .filter(|path| !taken.contains(path))
+        .filter(|path| path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("gguf")))
+        .filter_map(|path| {
+            let name = path.file_name()?.to_string_lossy().into_owned();
+            let size = std::fs::metadata(path).ok()?.len();
+            match components.iter().find(|component| component.filename == name) {
+                Some(component) => {
+                    let installed = std::fs::metadata(root.join(component.filename)).is_ok_and(|meta| meta.len() == component.bytes);
+                    (!installed && size != component.bytes).then(|| {
+                        serde_json::json!({ "file": name, "kind": "size", "size": size, "needs": component.bytes, "repository": component.repository, "revision": component.revision })
+                    })
+                }
+                None => Some(serde_json::json!({ "file": name, "kind": "unknown", "size": size })),
+            }
+        })
+        .collect()
+}
+
 /// Takes models the user already has instead of downloading them again.
 ///
 /// Anyone who has run Music3 through ComfyUI or another build already has these
@@ -7525,15 +7550,23 @@ async fn setup_adopt(State(state): State<AppState>, body: axum::body::Bytes) -> 
 
     let components = catalog.components.clone();
     let root = models_root.clone();
-    let found = tokio::task::spawn_blocking(move || adoptable_sources(&components, &root, &entries))
-        .await
-        .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+    let (found, mut refused) = tokio::task::spawn_blocking(move || {
+        let found = adoptable_sources(&components, &root, &entries);
+        let taken: Vec<std::path::PathBuf> = found.iter().map(|(_, source)| source.clone()).collect();
+        let refused = adopt_refusals(&components, &root, &entries, &taken);
+        (found, refused)
+    })
+    .await
+    .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
     for (component, source) in &found {
         let target = models_root.join(component.filename);
         // A hard link costs nothing and keeps one copy on disk; a folder on
         // another drive cannot have one, so that falls back to a copy.
-        if std::fs::hard_link(source, &target).is_err() && std::fs::copy(source, &target).is_err() {
-            continue;
+        if std::fs::hard_link(source, &target).is_err() {
+            if let Err(error) = std::fs::copy(source, &target) {
+                refused.push(serde_json::json!({ "file": component.filename, "kind": "copy", "error": error.to_string() }));
+                continue;
+            }
         }
         adopted.push(component.id.to_string());
     }
@@ -7544,6 +7577,7 @@ async fn setup_adopt(State(state): State<AppState>, body: axum::body::Bytes) -> 
         "picked": true,
         "folder": folder.display().to_string(),
         "adopted": adopted,
+        "refused": refused,
         "status": compose_setup_status(&state, status).await,
     })))
 }
@@ -9082,6 +9116,40 @@ mod tests {
         std::fs::write(folder.path().join("renamed.gguf"), b"turbo weights").unwrap();
         let found = adoptable_sources(&[turbo, merge], models.path(), &adoptable_files(folder.path(), ADOPT_FOLDER_DEPTH));
         assert_eq!(found.iter().map(|(component, _)| component.id).collect::<Vec<_>>(), ["turbo"]);
+    }
+
+    /// A file named as the catalogue's but of another build, and a GGUF of no
+    /// set, are said with the reason; the one taken and one already installed
+    /// are not.
+    #[test]
+    fn a_model_file_not_taken_is_named_with_why() {
+        use sha2::Digest;
+        let folder = tempfile::tempdir().unwrap();
+        let models = tempfile::tempdir().unwrap();
+        let sha = |body: &[u8]| -> &'static str { Box::leak(sha2::Sha256::digest(body).iter().map(|byte| format!("{byte:02x}")).collect::<String>().into_boxed_str()) };
+        let component = |id: &'static str, filename: &'static str, body: &[u8]| model_manager::Component { id, kind: "lm", filename, bytes: body.len() as u64, sha256: sha(body), repository: "org/repo", revision: "abc" };
+        let lm = component("lm-q4", "mm3-lm-Q4_K_M.gguf", b"pinned lm weights");
+        let dit = component("dit-q4", "mm3-dit-Q4_K_S.gguf", b"pinned dit weights");
+        let vocoder = component("vocoder", "vocoder.gguf", b"vocoder weights");
+        std::fs::write(folder.path().join("mm3-lm-Q4_K_M.gguf"), b"an imatrix build of the lm").unwrap();
+        std::fs::write(folder.path().join("mm3-lm-Q4_K_M-imat.gguf"), b"an imatrix build").unwrap();
+        std::fs::write(folder.path().join("mm3-dit-Q4_K_S.gguf"), b"pinned dit weights").unwrap();
+        std::fs::write(folder.path().join("vocoder.gguf"), b"vocoder").unwrap();
+        std::fs::write(models.path().join("vocoder.gguf"), b"vocoder weights").unwrap();
+        std::fs::write(folder.path().join("notes.txt"), b"x").unwrap();
+        let components = [lm, dit, vocoder];
+        let entries = adoptable_files(folder.path(), ADOPT_FOLDER_DEPTH);
+        let found = adoptable_sources(&components, models.path(), &entries);
+        let taken: Vec<std::path::PathBuf> = found.iter().map(|(_, source)| source.clone()).collect();
+        let mut refused = adopt_refusals(&components, models.path(), &entries, &taken);
+        refused.sort_by_key(|refusal| refusal["file"].as_str().unwrap_or_default().to_string());
+        assert_eq!(found.iter().map(|(component, _)| component.id).collect::<Vec<_>>(), ["dit-q4"]);
+        assert_eq!(refused.len(), 2, "{refused:?}");
+        assert_eq!(refused[0]["file"], "mm3-lm-Q4_K_M-imat.gguf");
+        assert_eq!(refused[0]["kind"], "unknown");
+        assert_eq!(refused[1]["file"], "mm3-lm-Q4_K_M.gguf");
+        assert_eq!(refused[1]["kind"], "size");
+        assert_eq!(refused[1]["needs"], b"pinned lm weights".len() as u64);
     }
 
     #[test]
