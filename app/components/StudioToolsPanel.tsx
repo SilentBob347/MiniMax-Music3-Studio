@@ -8,6 +8,7 @@ import { ConfirmDialog } from './ConfirmDialog';
 import { MidiTool } from './midi/MidiTool';
 import { MidiEditor } from './midi/MidiEditor';
 import { useI18n } from '../context/I18nContext';
+import { poll } from '../services/poll';
 import { saveFile } from '../services/saveFile';
 import { tempoAndKey } from '../services/songDownload';
 import { DevicePicker } from './DevicePicker';
@@ -124,9 +125,7 @@ export function StudioToolsPanel({ initialSongId }: { initialSongId?: string | n
   }, [songId]);
 
   useEffect(() => {
-    void refresh().catch(() => undefined);
-    const timer = window.setInterval(() => void refresh().catch(() => undefined), 1000);
-    return () => window.clearInterval(timer);
+    return poll(() => refresh().catch(() => undefined), 1000);
   }, [refresh]);
 
   const saveSettings = async (next: SeparationStatus['settings']) => {

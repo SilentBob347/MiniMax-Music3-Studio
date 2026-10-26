@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Check, ChevronDown, Loader2, ScrollText } from 'lucide-react';
 import { useI18n } from '../context/I18nContext';
+import { poll } from '../services/poll';
 
 /**
  * The engine coming up.
@@ -64,9 +65,7 @@ export const EngineStarting: React.FC<{ onReady?: () => void }> = ({ onReady }) 
         })
         .catch(() => undefined);
     };
-    void read();
-    const timer = window.setInterval(() => void read(), 1000);
-    return () => window.clearInterval(timer);
+    return poll(read, 1000);
   }, [onReady]);
 
   // Starting takes about three seconds here. Much longer than that means

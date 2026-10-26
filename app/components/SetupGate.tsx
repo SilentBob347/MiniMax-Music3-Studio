@@ -4,6 +4,7 @@ import { Check, ChevronDown, Download, FolderDown, FolderOpen, Loader2, Square, 
 import { useI18n } from '../context/I18nContext';
 import { RescanButton } from './RescanButton';
 import { ManualDownloads } from './ManualDownloads';
+import { poll } from '../services/poll';
 import { DevicePicker, type Device } from './DevicePicker';
 import { AssistantExtras } from './AssistantSettings';
 import { KaraokeExtras } from './KaraokeSettings';
@@ -241,8 +242,7 @@ export const OptionalGroup: React.FC<{
     const active = status?.active_download;
     const running = Boolean(active && !active.done);
     if (!running && !starting) return;
-    const timer = window.setInterval(() => void load().catch(() => undefined), 1000);
-    return () => window.clearInterval(timer);
+    return poll(() => load().catch(() => undefined), 1000);
   }, [status?.active_download, starting, load]);
 
   // The moment the server admits a download is running, the press has landed
@@ -745,9 +745,7 @@ export const SetupGate: React.FC<{ onReady?: () => void; mode?: 'first-run' | 's
   }, []);
 
   useEffect(() => {
-    void refresh().catch((reason) => setError(reason.message));
-    const timer = window.setInterval(() => void refresh().catch((reason) => setError(reason.message)), 1000);
-    return () => window.clearInterval(timer);
+    return poll(() => refresh().catch((reason) => setError(reason.message)), 1000);
   }, [refresh]);
 
   const groups = useMemo(() => componentsByKind(catalog?.components || []), [catalog]);

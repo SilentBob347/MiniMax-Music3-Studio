@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, Check, Cpu, FolderOpen, Loader2, RotateCw , Terminal } from 'lucide-react';
 import { useI18n } from '../context/I18nContext';
+import { poll } from '../services/poll';
 
 /**
  * Launch options for the local engine.
@@ -145,13 +146,11 @@ export const EngineSettings: React.FC = () => {
   const [logsOpen, setLogsOpen] = useState(false);
   useEffect(() => {
     if (!logsOpen) return;
-    const read = () => void fetch('/v1/engine/logs')
+    const read = () => fetch('/v1/engine/logs')
       .then(response => (response.ok ? response.json() : Promise.reject(new Error())))
       .then((body: { lines?: string[] }) => setLogs((body.lines ?? []).slice(-200)))
       .catch(() => undefined);
-    read();
-    const timer = window.setInterval(read, 2000);
-    return () => window.clearInterval(timer);
+    return poll(read, 2000);
   }, [logsOpen]);
 
   const restart = async () => {
