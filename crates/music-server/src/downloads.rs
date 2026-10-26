@@ -194,11 +194,11 @@ impl Downloader {
             return false;
         }
         if let Err(error) = crate::install_record::write(record, asset.url, "", &files, &self.root) {
-            eprintln!("[ERROR] {}: the record of the download already on disk was not written: {error:#}", asset.label);
+            studio_log!("[ERROR] {}: the record of the download already on disk was not written: {error:#}", asset.label);
         }
         if recorded_earlier {
             if let Err(error) = fs::remove_file(&earlier) {
-                eprintln!("[ERROR] {}: the earlier source file was not removed: {error}", earlier.display());
+                studio_log!("[ERROR] {}: the earlier source file was not removed: {error}", earlier.display());
             }
         }
         true
@@ -717,7 +717,7 @@ pub(crate) fn report_take_failure(target: &Path, app: &str, error: &io::Error) {
     let mut said = SAID.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if !said.iter().any(|known| known == target) {
         said.push(target.to_path_buf());
-        eprintln!("[ERROR] {} was not taken from {app}: {error}", target.display());
+        studio_log!("[ERROR] {} was not taken from {app}: {error}", target.display());
     }
 }
 
@@ -735,7 +735,7 @@ fn taken() -> &'static std::sync::Mutex<std::collections::BTreeMap<String, Taken
 }
 
 pub(crate) fn note_taken(id: &str, file: &Path, app: &str) {
-    eprintln!("[OK] {id} taken from {app} instead of downloading");
+    studio_log!("[OK] {id} taken from {app} instead of downloading");
     let file = file.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
     taken().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(id.to_string(), Taken { app: app.to_string(), file });
 }

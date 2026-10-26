@@ -346,7 +346,7 @@ pub fn remove_older_tool_folders(downloader: &Downloader, current_folder: &str, 
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with(prefix) && entry.path() != current && entry.path().is_dir() {
                 if let Err(error) = std::fs::remove_dir_all(entry.path()) {
-                    eprintln!("[ERROR] could not remove the older {} {}: {error}", prefix, entry.path().display());
+                    studio_log!("[ERROR] could not remove the older {} {}: {error}", prefix, entry.path().display());
                 }
             }
         }
@@ -548,7 +548,7 @@ fn read_run(dir: &Path) -> Option<Run> {
             match serde_json::from_str(line) {
                 Ok(record) => steps.push(record),
                 Err(error) => {
-                    eprintln!("[ERROR] {}: a step line is not JSON ({error}): {line}", dir.join(STEPS_FILE).display());
+                    studio_log!("[ERROR] {}: a step line is not JSON ({error}): {line}", dir.join(STEPS_FILE).display());
                     return None;
                 }
             }
@@ -713,7 +713,7 @@ impl Training {
             .filter_map(|entry| match read_dataset(&entry.path().join("dataset.json")) {
                 Ok(dataset) => Some(dataset),
                 Err(error) => {
-                    eprintln!("[ERROR] {error:#}");
+                    studio_log!("[ERROR] {error:#}");
                     None
                 }
             })

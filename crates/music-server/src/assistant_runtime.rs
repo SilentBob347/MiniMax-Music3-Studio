@@ -515,11 +515,11 @@ impl AssistantRuntime {
             _ => return false,
         };
         if let Err(error) = crate::install_record::write(record, asset.url, "", &[path], &self.root) {
-            eprintln!("[ERROR] {}: the record of the download already on disk was not written: {error:#}", asset.label);
+            studio_log!("[ERROR] {}: the record of the download already on disk was not written: {error:#}", asset.label);
         }
         if recorded_earlier {
             if let Err(error) = fs::remove_file(&earlier) {
-                eprintln!("[ERROR] {}: the earlier source file was not removed: {error}", earlier.display());
+                studio_log!("[ERROR] {}: the earlier source file was not removed: {error}", earlier.display());
             }
         }
         true

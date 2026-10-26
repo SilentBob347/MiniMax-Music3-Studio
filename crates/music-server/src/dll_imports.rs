@@ -435,7 +435,7 @@ mod tests {
         let found = |unit: &Unit, skipped: &mut Vec<String>| -> Option<PathBuf> {
             let folder = unit.find(&roots);
             match &folder {
-                Some(folder) => eprintln!("[OK] {} ({}) at {}", unit.name, unit.ids.join(", "), folder.display()),
+                Some(folder) => studio_log!("[OK] {} ({}) at {}", unit.name, unit.ids.join(", "), folder.display()),
                 None => skipped.push(format!("{} ({}): not on this computer at its pin", unit.name, unit.ids.join(", "))),
             }
             folder
@@ -496,7 +496,7 @@ mod tests {
         for build in [dub_tcpp::Build::Cuda, dub_tcpp::Build::Vulkan, dub_tcpp::Build::Cpu] {
             match local_tcpp(build, &roots).expect("read transcribe.cpp builds") {
                 Some(library) => {
-                    eprintln!("[OK] transcribe.cpp {build:?} at {}", library.display());
+                    studio_log!("[OK] transcribe.cpp {build:?} at {}", library.display());
                     let mut process: Vec<PathBuf> = library.parent().map(Path::to_path_buf).into_iter().collect();
                     process.extend(cublas13.iter().cloned());
                     loads.push(Load::in_process(library, &process));
@@ -547,9 +547,9 @@ mod tests {
                 }
             }
         }
-        eprintln!("[OK] {} programs and libraries walked", loads.len());
+        studio_log!("[OK] {} programs and libraries walked", loads.len());
         for skip in &skipped {
-            eprintln!("[SKIP] {skip}");
+            studio_log!("[SKIP] {skip}");
         }
         assert!(problems.is_empty(), "will not load: {problems:#?}");
     }

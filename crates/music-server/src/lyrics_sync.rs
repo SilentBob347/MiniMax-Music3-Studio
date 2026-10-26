@@ -1102,7 +1102,7 @@ pub fn with_card(builder: ort::session::builder::SessionBuilder, card: Option<On
     match attempt {
         Ok(on_card) => (on_card, true),
         Err(error) => {
-            eprintln!("[ERROR] the {card:?} provider did not register, the processor runs this instead: {error}");
+            studio_log!("[ERROR] the {card:?} provider did not register, the processor runs this instead: {error}");
             (builder, false)
         }
     }
@@ -1167,7 +1167,7 @@ fn preload_cuda(directory: &Path) {
             true
         });
         if pending.len() == before {
-            eprintln!("[ERROR] the CUDA libraries did not load, the provider will not register: {}", errors.join("; "));
+            studio_log!("[ERROR] the CUDA libraries did not load, the provider will not register: {}", errors.join("; "));
             return;
         }
     }
@@ -1183,7 +1183,7 @@ fn preload(library: &Path) {
     const LOAD_WITH_ALTERED_SEARCH_PATH: u32 = 0x8;
     let wide: Vec<u16> = library.as_os_str().encode_wide().chain(Some(0)).collect();
     if unsafe { LoadLibraryExW(wide.as_ptr(), std::ptr::null_mut(), LOAD_WITH_ALTERED_SEARCH_PATH) }.is_null() {
-        eprintln!("[ERROR] could not load {}: {}", library.display(), std::io::Error::last_os_error());
+        studio_log!("[ERROR] could not load {}: {}", library.display(), std::io::Error::last_os_error());
     }
 }
 
@@ -1305,8 +1305,8 @@ impl LyricsSync {
             let Ok(meta) = fs::symlink_metadata(&path) else { continue };
             let removed = if meta.file_type().is_symlink() { fs::remove_dir(&path).or_else(|_| fs::remove_file(&path)) } else { fs::remove_dir_all(&path) };
             match removed {
-                Ok(()) => eprintln!("removed the retired Parakeet {}", path.display()),
-                Err(error) => eprintln!("[ERROR] could not remove the retired Parakeet {}: {error}", path.display()),
+                Ok(()) => studio_log!("removed the retired Parakeet {}", path.display()),
+                Err(error) => studio_log!("[ERROR] could not remove the retired Parakeet {}: {error}", path.display()),
             }
         }
     }
@@ -2497,9 +2497,9 @@ mod live_recognition {
         let words = sync
             .whisper_words(&config, std::path::Path::new(&track), Some("ru"), "")
             .expect("recognition");
-        eprintln!("words: {}", words.len());
+        studio_log!("words: {}", words.len());
         for (at, word) in words.iter().take(8) {
-            eprintln!("  {at:.2}s {word}");
+            studio_log!("  {at:.2}s {word}");
         }
         assert!(!words.is_empty(), "nothing was recognised");
     }
@@ -2569,7 +2569,7 @@ mod directml_live {
         let (on_card, on_gpu, card_time) = measure(card);
         assert!(on_gpu, "DirectML did not take both models");
         let (on_processor, _, processor_time) = measure(None);
-        eprintln!("card {on_card:?} in {card_time:.1} s, processor {on_processor:?} in {processor_time:.1} s");
+        studio_log!("card {on_card:?} in {card_time:.1} s, processor {on_processor:?} in {processor_time:.1} s");
         assert_eq!(on_card, on_processor, "the card hears another tempo or key");
     }
 
@@ -2590,7 +2590,7 @@ mod directml_live {
             let words = parakeet_transcribe(&asr, model, &track, None).expect("recognition");
             let heard = words_of(words.iter().map(|(_, word)| word.as_str()));
             let share = in_order(&sung, &heard);
-            eprintln!("Parakeet on {build:?}: {:.0}% of the lyrics in order, {:.1} s\n  {}", share * 100.0, started.elapsed().as_secs_f64(), heard.join(" "));
+            studio_log!("Parakeet on {build:?}: {:.0}% of the lyrics in order, {:.1} s\n  {}", share * 100.0, started.elapsed().as_secs_f64(), heard.join(" "));
             assert!(share > 0.5, "{build:?} hears too little of the lyrics");
         }
     }
