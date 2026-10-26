@@ -70,7 +70,7 @@ pub const ASSETS: &[Asset] = &[
         id: "gemma-4-e4b-q4_0",
         label: "Gemma 4 E4B IT (QAT q4_0)",
         kind: AssetKind::Model,
-        url: "https://huggingface.co/google/gemma-4-E4B-it-qat-q4_0-gguf/resolve/main/gemma-4-E4B_q4_0-it.gguf",
+        url: "https://huggingface.co/google/gemma-4-E4B-it-qat-q4_0-gguf/resolve/4b4a2c1d584be7264f87aac328a1bc739ce81b6c/gemma-4-E4B_q4_0-it.gguf",
         relative_path: "models/gemma-4-E4B_q4_0-it.gguf",
         bytes: 5_154_941_280,
         unzip_into: None,
@@ -82,7 +82,7 @@ pub const ASSETS: &[Asset] = &[
         id: "gemma-4-12b-q4_0",
         label: "Gemma 4 12B IT (QAT q4_0)",
         kind: AssetKind::Model,
-        url: "https://huggingface.co/google/gemma-4-12b-it-qat-q4_0-gguf/resolve/main/gemma-4-12b-it-qat-q4_0.gguf",
+        url: "https://huggingface.co/google/gemma-4-12B-it-qat-q4_0-gguf/resolve/29d097773436b69ff9feafd636ab4cf873786537/gemma-4-12b-it-qat-q4_0.gguf",
         relative_path: "models/gemma-4-12b-it-qat-q4_0.gguf",
         bytes: 6_975_879_296,
         unzip_into: None,
@@ -94,7 +94,7 @@ pub const ASSETS: &[Asset] = &[
         id: "gemma-4-12b-q5_k_m",
         label: "Gemma 4 12B IT (Q5_K_M)",
         kind: AssetKind::Model,
-        url: "https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/gemma-4-12b-it-Q5_K_M.gguf",
+        url: "https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/fc034cfff751157913579611efad8462ac1be606/gemma-4-12b-it-Q5_K_M.gguf",
         relative_path: "models/gemma-4-12b-it-Q5_K_M.gguf",
         bytes: 8_413_576_000,
         unzip_into: None,
@@ -106,7 +106,7 @@ pub const ASSETS: &[Asset] = &[
         id: "gemma-4-12b-q6_k",
         label: "Gemma 4 12B IT (Q6_K)",
         kind: AssetKind::Model,
-        url: "https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/gemma-4-12b-it-Q6_K.gguf",
+        url: "https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/fc034cfff751157913579611efad8462ac1be606/gemma-4-12b-it-Q6_K.gguf",
         relative_path: "models/gemma-4-12b-it-Q6_K.gguf",
         bytes: 9_786_022_720,
         unzip_into: None,
@@ -118,7 +118,7 @@ pub const ASSETS: &[Asset] = &[
         id: "gemma-4-12b-q8_0",
         label: "Gemma 4 12B IT (Q8_0)",
         kind: AssetKind::Model,
-        url: "https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/gemma-4-12b-it-Q8_0.gguf",
+        url: "https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/fc034cfff751157913579611efad8462ac1be606/gemma-4-12b-it-Q8_0.gguf",
         relative_path: "models/gemma-4-12b-it-Q8_0.gguf",
         bytes: 12_669_647_680,
         unzip_into: None,
@@ -463,9 +463,12 @@ impl AssistantRuntime {
         self.is_on_disk(asset) && self.from_the_pin(asset)
     }
 
-    /// Where the address a runtime was unpacked from is kept, in its own folder.
+    /// Where the address an asset came from is kept: in a runtime's own folder, beside a model's file.
     pub(crate) fn source_record(&self, asset: &Asset) -> Option<PathBuf> {
-        asset.unzip_into.map(|flavour| self.root.join("runtime").join(flavour).join(format!(".source-{}", asset.id)))
+        Some(match asset.unzip_into {
+            Some(flavour) => self.root.join("runtime").join(flavour).join(format!(".source-{}", asset.id)),
+            None => PathBuf::from(format!("{}.source", self.path_of(asset).display())),
+        })
     }
 
     fn record_source(&self, asset: &Asset) {
@@ -476,22 +479,26 @@ impl AssistantRuntime {
         }
     }
 
-    /// Whether an unpacked runtime is the pinned llama.cpp build (its address names the build): another build in the
-    /// same folder is not installed. One unpacked before addresses were kept is taken as it is, once.
+    /// Whether an asset on disk is the pinned one (its address names the build or the revision): another build or
+    /// another upload under the same name is not installed. A model kept before addresses were is judged by the
+    /// pinned size; a runtime unpacked then is taken as it is, once.
     fn from_the_pin(&self, asset: &Asset) -> bool {
         let Some(record) = self.source_record(asset) else { return true };
         match fs::read_to_string(&record) {
             Ok(source) => source.trim() == asset.url,
             Err(_) => {
-                self.record_source(asset);
-                true
+                let pinned = asset.unzip_into.is_some() || fs::metadata(self.path_of(asset)).is_ok_and(|meta| meta.len() == asset.bytes);
+                if pinned {
+                    self.record_source(asset);
+                }
+                pinned
             }
         }
     }
 
-    /// Clears a runtime of an earlier build so the download fetches the pinned one.
+    /// Clears an asset of an earlier pin so the download fetches the pinned one.
     fn drop_stale(&self, asset: &Asset) -> Result<()> {
-        if asset.unzip_into.is_some() && self.is_on_disk(asset) && !self.from_the_pin(asset) {
+        if self.is_on_disk(asset) && !self.from_the_pin(asset) {
             self.remove(asset.id)?;
         }
         Ok(())
@@ -599,6 +606,9 @@ impl AssistantRuntime {
             let manifest = PathBuf::from(format!("{}.done", path.display()));
             fs::remove_file(manifest).ok();
         }
+        if let Some(record) = self.source_record(asset) {
+            fs::remove_file(record).ok();
+        }
         Ok(freed)
     }
 
@@ -644,7 +654,10 @@ impl AssistantRuntime {
                 Ok(()) => match download_asset(&self.http, asset, &target, &self.state, base, self.cancel.clone()).await {
                     Ok(()) => match asset.unzip_into {
                         Some(flavour) => crate::downloads::extract_archive(&target, &self.root.join("runtime").join(flavour)).map(|()| self.record_source(asset)),
-                        None => Ok(()),
+                        None => {
+                            self.record_source(asset);
+                            Ok(())
+                        }
                     },
                     Err(error) => Err(error),
                 },
@@ -992,6 +1005,35 @@ mod tests {
 
         assert!(!runtime.is_installed(model));
         assert_eq!(runtime.partial_bytes(model), 19);
+        fs::remove_dir_all(&temp).ok();
+    }
+
+    /// A model is fetched at a revision, not a branch: a repository that uploads a corrected file under the same
+    /// name changes nothing for a studio already pinned to its file.
+    #[test]
+    fn every_model_is_pinned_to_a_revision() {
+        for entry in ASSETS.iter().filter(|entry| entry.kind == AssetKind::Model) {
+            let revision = entry.url.split("/resolve/").nth(1).and_then(|rest| rest.split('/').next()).unwrap_or_default();
+            assert!(revision.len() == 40 && revision.chars().all(|c| c.is_ascii_hexdigit()), "{} is not pinned to a commit: {}", entry.id, entry.url);
+        }
+    }
+
+    /// A model kept before addresses were is the pin when it weighs what the pin does, and its address is kept
+    /// then; another size, or a record of another address, is not installed.
+    #[test]
+    fn a_model_of_another_upload_is_not_installed() {
+        let temp = std::env::temp_dir().join(format!("assistant-runtime-{}", uuid::Uuid::now_v7()));
+        let runtime = AssistantRuntime::new(&temp);
+        let pinned = Asset { id: "test-model", url: "https://huggingface.co/org/repo/resolve/abc/model.gguf", relative_path: "models/model.gguf", bytes: 5, ..*asset("gemma-4-e4b-q4_0").expect("catalog entry") };
+        let path = runtime.path_of(&pinned);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"other upload").unwrap();
+        assert!(!runtime.is_installed(&pinned), "another size is another upload");
+        fs::write(&path, b"12345").unwrap();
+        assert!(runtime.is_installed(&pinned));
+        assert_eq!(fs::read_to_string(runtime.source_record(&pinned).unwrap()).unwrap(), pinned.url);
+        let next = Asset { url: "https://huggingface.co/org/repo/resolve/def/model.gguf", ..pinned };
+        assert!(!runtime.is_installed(&next), "the same size from another revision is told apart by its address");
         fs::remove_dir_all(&temp).ok();
     }
 }
