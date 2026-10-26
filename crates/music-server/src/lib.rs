@@ -7161,7 +7161,6 @@ fn midi_device(options: &EngineOptions) -> &'static str {
 /// runs it, following its notes as they come. Returns how many it heard.
 async fn transcribe_to_midi(state: &AppState, size: &'static midi::Size, audio: &std::path::Path, output: &std::path::Path) -> anyhow::Result<usize> {
     use tokio::io::AsyncBufReadExt;
-    dub_tcpp::cpu_floor("Audio to MIDI").map_err(anyhow::Error::msg)?;
     let missing = state.midi.missing(size);
     if !missing.is_empty() {
         // the first use fetches what the tool needs, as the karaoke recogniser does
