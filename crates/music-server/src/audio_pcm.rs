@@ -371,6 +371,21 @@ mod tests {
     }
 
     #[test]
+    fn mp2_adpcm_matroska_and_caf_decode() {
+        let files: [(&[u8], &str); 4] = [
+            (include_bytes!("testdata/tone.mp2"), "mp2"),
+            (include_bytes!("testdata/tone-adpcm.wav"), "wav"),
+            (include_bytes!("testdata/tone.mka"), "mka"),
+            (include_bytes!("testdata/tone.caf"), "caf"),
+        ];
+        for (bytes, extension) in files {
+            let decoded = decode_stereo_bytes(bytes.to_vec(), extension).unwrap_or_else(|error| panic!("{extension}: {error:#}"));
+            let seconds = decoded.left.len() as f64 / f64::from(decoded.rate);
+            assert!((0.15..0.3).contains(&seconds), "{extension}: {seconds} s");
+        }
+    }
+
+    #[test]
     fn resampling_keeps_the_band_and_drops_what_lies_above_it() {
         let tone = |hz: f32| -> Vec<f32> { (0..44_100).map(|index| (2.0 * std::f32::consts::PI * hz * index as f32 / 44_100.0).sin() * 0.5).collect() };
         let rms = |samples: &[f32]| (samples.iter().map(|sample| sample * sample).sum::<f32>() / samples.len() as f32).sqrt();
