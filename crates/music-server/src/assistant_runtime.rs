@@ -483,6 +483,7 @@ impl AssistantRuntime {
     }
 
     /// The folder the assistant's downloads are recorded under.
+    #[cfg(test)]
     pub(crate) fn root(&self) -> &Path {
         &self.root
     }
@@ -710,7 +711,7 @@ impl AssistantRuntime {
         let mut failure = None;
         for asset in &pending {
             let target = self.path_of(asset);
-            let outcome = match self.drop_stale(asset) {
+            let outcome = match self.drop_stale(asset).and_then(|()| crate::install_record::begin(&self.record_of(asset))) {
                 Ok(()) => match download_asset(&self.http, asset, &target, &self.state, base, self.cancel.clone()).await {
                     Ok(()) => Self::finish(asset, &target, &self.root),
                     Err(error) => Err(error),
@@ -760,7 +761,7 @@ impl AssistantRuntime {
             });
         }
 
-        if let Err(error) = self.drop_stale(asset) {
+        if let Err(error) = self.drop_stale(asset).and_then(|()| crate::install_record::begin(&self.record_of(asset))) {
             if let Some(progress) = self.state.lock().await.download.as_mut() {
                 progress.done = true;
                 progress.error = Some(format!("{error:#}"));
