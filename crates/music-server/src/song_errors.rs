@@ -30,6 +30,9 @@ pub enum SongError {
     /// Lost with an engine that restarted, whose last line says where it was.
     LostAtLine(String),
     Lost,
+    /// Lost with an engine that had ended with this exit code: its hex, what a Windows one means (a key the
+    /// window translates), and the engine's last line when it left one.
+    LostExit { exit: String, meaning: Option<&'static str>, line: Option<String> },
     /// The engine gave the song up while loading the models: the card's memory ran out.
     LoadVram,
     /// The engine gave the song up while loading the models: the computer's memory ran out.
@@ -58,6 +61,8 @@ impl SongError {
             SongError::LostDevice(None) => "lost_device_silent",
             SongError::LostAtLine(_) => "lost_at_line",
             SongError::Lost => "lost",
+            SongError::LostExit { line: Some(_), .. } => "lost_exit_at_line",
+            SongError::LostExit { line: None, .. } => "lost_exit",
             SongError::LoadVram => "load_vram",
             SongError::LoadRam => "load_ram",
             SongError::EngineFatal(_) => "engine_fatal",
@@ -95,6 +100,13 @@ impl SongError {
             | SongError::ImportFailed(detail)
             | SongError::OpenRouterFailed(detail) => put("detail", json!(detail)),
             SongError::LostAtLine(line) | SongError::EngineFatal(line) => put("line", json!(line)),
+            SongError::LostExit { exit, meaning, line } => {
+                put("exit", json!(exit));
+                put("meaning", json!(meaning.unwrap_or("other")));
+                if let Some(line) = line {
+                    put("line", json!(line));
+                }
+            }
             _ => {}
         }
         params
@@ -121,6 +133,16 @@ impl fmt::Display for SongError {
             SongError::LostDevice(None) => f.write_str("The graphics card failed during this song (a CUDA or driver error) and the engine restarted, so the song was lost. The engine log is in Settings, Engine."),
             SongError::LostAtLine(line) => write!(f, "The engine stopped during this song and restarted, so the song was lost; its last line was {line}. The engine log is in Settings, Engine."),
             SongError::Lost => f.write_str("The engine stopped during this song and restarted, so the song was lost. The engine log is in Settings, Engine."),
+            SongError::LostExit { exit, meaning, line } => {
+                let how = match meaning.and_then(exit_meaning_text) {
+                    Some(meaning) => format!("{meaning}, exit code {exit}"),
+                    None => format!("exit code {exit}"),
+                };
+                match line {
+                    Some(line) => write!(f, "The engine stopped during this song ({how}) and restarted, so the song was lost; its last line was {line}. The engine log is in Settings, Engine."),
+                    None => write!(f, "The engine stopped during this song ({how}) and restarted, so the song was lost. The engine log is in Settings, Engine."),
+                }
+            }
             SongError::LoadVram => f.write_str("The graphics card ran out of memory while the engine was loading the models. Choose a smaller quantisation in the model manager, or close whatever else is using the card - the writing assistant holds several gigabytes of its own."),
             SongError::LoadRam => f.write_str("The computer ran out of memory (RAM) while the engine was loading the models. Close other programs that take memory, or choose a smaller quantisation in the model manager."),
             SongError::EngineFatal(line) => f.write_str(line),
@@ -132,6 +154,35 @@ impl fmt::Display for SongError {
             SongError::OpenRouterFailed(detail) => write!(f, "OpenRouter music generation failed: {detail}"),
         }
     }
+}
+
+/// What a Windows exit code (NTSTATUS, in hex without `0x`) of the engine means, as a key the window translates
+/// (`exit_<key>` in `app/i18n/songErrors.ts`).
+pub fn exit_meaning(code: &str) -> Option<&'static str> {
+    Some(match code {
+        "c0000005" => "access_violation",
+        "c000001d" => "illegal_instruction",
+        "c0000409" => "aborted",
+        "c00000fd" => "stack_overflow",
+        "c0000374" => "heap_corruption",
+        "c0000135" | "c0000139" | "c0000142" => "library_missing",
+        "c0000017" | "c000012d" => "out_of_memory",
+        _ => return None,
+    })
+}
+
+/// The English words of an exit meaning, for the log, the hub and agents.
+fn exit_meaning_text(key: &str) -> Option<&'static str> {
+    Some(match key {
+        "access_violation" => "a crash: an access violation",
+        "illegal_instruction" => "an instruction this processor does not have",
+        "aborted" => "a crash: the engine aborted",
+        "stack_overflow" => "a crash: a stack overflow",
+        "heap_corruption" => "a crash: corrupted memory",
+        "library_missing" => "a library of the engine did not load",
+        "out_of_memory" => "the computer ran out of memory",
+        _ => return None,
+    })
 }
 
 impl From<String> for SongError {
@@ -163,6 +214,8 @@ mod tests {
             SongError::LostDevice(None),
             SongError::LostAtLine("x".into()),
             SongError::Lost,
+            SongError::LostExit { exit: "0xc000001d".into(), meaning: Some("illegal_instruction"), line: Some("x".into()) },
+            SongError::LostExit { exit: "0x1".into(), meaning: None, line: None },
             SongError::LoadVram,
             SongError::LoadRam,
             SongError::EngineFatal("x".into()),
@@ -184,6 +237,7 @@ mod tests {
                 | SongError::LostDevice(_)
                 | SongError::LostAtLine(_)
                 | SongError::Lost
+                | SongError::LostExit { .. }
                 | SongError::LoadVram
                 | SongError::LoadRam
                 | SongError::EngineFatal(_)
@@ -217,6 +271,20 @@ mod tests {
             }
         }
         assert!(missing.is_empty(), "without a translation: {missing:?}");
+    }
+
+    /// Every meaning of an exit code, and the one for a code without a meaning, has its words in every language.
+    #[test]
+    fn every_exit_meaning_has_a_translation_in_every_language() {
+        let dictionary = include_str!("../../../app/i18n/songErrors.ts");
+        let codes = ["c0000005", "c000001d", "c0000409", "c00000fd", "c0000374", "c0000135", "c0000017"];
+        let keys: Vec<&str> = codes.iter().filter_map(|code| exit_meaning(code)).chain(["other"]).collect();
+        assert_eq!(keys.len(), codes.len() + 1);
+        for key in keys {
+            assert_eq!(dictionary.matches(&format!("\n  exit_{key}:")).count(), 5, "exit_{key}");
+        }
+        let crashed = SongError::LostExit { exit: "0xc000001d".into(), meaning: exit_meaning("c000001d"), line: Some("[AR] Frame 3".into()) };
+        assert_eq!(crashed.to_string(), "The engine stopped during this song (an instruction this processor does not have, exit code 0xc000001d) and restarted, so the song was lost; its last line was [AR] Frame 3. The engine log is in Settings, Engine.");
     }
 
     #[test]

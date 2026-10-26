@@ -8,6 +8,7 @@ Windows build.
 
 ### Fixed
 
+- **A lost song names how the engine ended**: an engine that crashed during a song was only "stopped"; its exit code is now read before the restart replaces it, noted in the engine log and told in words in the studio's language - an access violation, an instruction this processor does not have, a library that did not load, memory that ran out.
 - **The chosen compute device reaches the engine**: since the upstream update the engine takes its device as `--device` and no longer reads `GGML_BACKEND`, so a card, Vulkan or the processor chosen in Settings - Local engine was ignored; it is passed as `--device`, and a device the engine does not have is named at the start with the ones it has. A failed song's reason is looked for in the whole engine log, not the window's last 512 lines.
 - **The statistics count what people ask for, not the window's own polls**: the setup status, the computer's load, the activity, the running songs, the karaoke and assistant states and the engine start and log were counted as features each time the window asked for them by itself; they now carry `x-hub-skip`, as the shared standard says.
 - **The window keeps up with a slow service**: the setup status, the engine start, the tools, LoRAs, training, the agent panel and the engine log were asked again on a timer whether or not the last answer had come, so a service answering slowly had the same request queued several times over and the window showed what was on disk minutes late; each is now asked again a pause after its answer, one at a time.

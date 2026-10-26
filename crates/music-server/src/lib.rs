@@ -4560,6 +4560,10 @@ async fn restart_engine(state: &AppState) -> Result<(), String> {
     let mut supervisor = state.engine.lock().await;
     let owned = supervisor.is_some();
     if let Some(engine) = supervisor.as_mut() {
+        // the one moment its exit code can still be read: a new supervisor starts with no child
+        if let Some(exit) = engine.exit_status() {
+            music_engine::mm_server::note_in_log(&format!("the previous engine had already exited: {exit}"));
+        }
         tokio::task::block_in_place(|| engine.stop(std::time::Duration::from_secs(10)))
             .map_err(|error| format!("stopping the local engine failed: {error}"))?;
     }
@@ -4736,9 +4740,18 @@ fn lost_job_reason(log: &str) -> SongError {
         SongError::LostRam
     } else if describes_device_failure(&lowered) {
         SongError::LostDevice(device_error_line(log))
+    } else if let Some((exit, meaning)) = engine_exit(log) {
+        SongError::LostExit { exit, meaning, line: last_engine_line(log) }
     } else {
         last_engine_line(log).map_or(SongError::Lost, SongError::LostAtLine)
     }
+}
+
+/// The exit code of the engine that ended, as the studio noted it at the restart, and what a Windows one means.
+fn engine_exit(log: &str) -> Option<(String, Option<&'static str>)> {
+    let line = log.lines().rev().find(|line| line.contains("had already exited:"))?;
+    let code = line.rsplit_once("(0x")?.1.trim_end_matches(')').to_lowercase();
+    Some((format!("0x{code}"), song_errors::exit_meaning(&code)))
 }
 
 /// The last thing the engine wrote before it went: a process the driver ends says nothing, and the stage it was
@@ -9076,6 +9089,18 @@ mod tests {
         assert!(lost_job_reason("ggml_cuda_compute_forward: MUL_MAT failed").to_string().contains("CUDA or driver error"));
         assert!(lost_job_reason("[NAR] Step 2/16, 87844 ms\n[NAR] Step 3/16\n[studio] the engine stopped answering").to_string().contains("its last line was [NAR] Step 3/16."));
         assert!(lost_job_reason("[Server] listening").to_string().contains("stopped during this song"));
+    }
+
+    #[test]
+    fn a_lost_song_names_how_the_engine_ended() {
+        let crashed = "[AR] Frame 1200/1500\n[studio] the previous engine had already exited: exit code: 0xc000001d (0xc000001d)";
+        let reason = lost_job_reason(crashed);
+        assert_eq!(reason.code(), Some("lost_exit_at_line"));
+        assert!(reason.to_string().contains("(an instruction this processor does not have, exit code 0xc000001d)"), "{reason}");
+        assert!(reason.to_string().contains("its last line was [AR] Frame 1200/1500."), "{reason}");
+        let unknown = lost_job_reason("[studio] the previous engine had already exited: exit code: 3 (0x3)");
+        assert_eq!(unknown.code(), Some("lost_exit"));
+        assert!(unknown.to_string().contains("(exit code 0x3)"), "{unknown}");
     }
 
     #[test]
