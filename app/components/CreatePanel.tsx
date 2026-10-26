@@ -1,6 +1,6 @@
 import { NumberField } from './NumberField';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { libraryChanged, setupStatusChanged, useActivity, useAssistantStatus, usePromptCheck, useSetupStatus, type ActivityEntry } from '../services/studioQueries';
+import { libraryChanged, SELF_READ, setupStatusChanged, useActivity, useAssistantStatus, usePromptCheck, useSetupStatus, type ActivityEntry } from '../services/studioQueries';
 import { karaokeReason } from '../services/karaoke';
 import { AlertTriangle, ChevronDown, CircleAlert, Dices, FolderOpen, Loader2, RotateCcw, Save, Sparkles, Square, Tags, Trash2, Wand2, Settings2, X } from 'lucide-react';
 import type { Music3Request, Playlist, Song } from '../types';
@@ -413,7 +413,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
 
 
   useEffect(() => {
-    void fetch('/v1/local-models/music')
+    void fetch('/v1/local-models/music', { headers: SELF_READ })
       .then(response => (response.ok ? response.json() : Promise.reject(new Error())))
       .then((body: { catalog?: EngineCatalog }) => setCatalog(body.catalog ?? null))
       .catch(() => setCatalog(null));

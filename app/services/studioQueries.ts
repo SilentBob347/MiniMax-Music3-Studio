@@ -264,7 +264,7 @@ export function usePromptCheck(caption: string, lyrics: string, instrumental: bo
     queryFn: async () => {
       const response = await fetch('/v1/music/prompt-check', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...SELF_READ, 'Content-Type': 'application/json' },
         body: JSON.stringify(asked),
       });
       if (!response.ok) throw new Error(`/v1/music/prompt-check answered ${response.status}`);
