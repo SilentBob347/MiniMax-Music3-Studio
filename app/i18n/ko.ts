@@ -1353,7 +1353,7 @@ export const ko = {
     maxBatchFieldHint: '이 값을 초과하는 요청은 엔진이 거부합니다.',
     maxSeqLabel: 'LM KV 캐시 (--max-seq)',
     maxSeqHint: '비워두면 모델 자체 컨텍스트 길이를 사용합니다.',
-    diagnostics: '진단',
+    diagnostics: '진단 플래그',
     noFlashAttentionLabel: 'flash attention 비활성화',
     noFlashAttentionHint: '--no-fa. 더 느리지만 드라이버나 그래픽카드가 flash attention 에서 문제를 일으킬 때 사용합니다.',
     splitCfgLabel: 'CFG 를 두 번의 순전파로 분리',

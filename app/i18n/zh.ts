@@ -1353,7 +1353,7 @@ export const zh = {
     maxBatchFieldHint: '超过该值的请求会被引擎拒绝。',
     maxSeqLabel: 'LM KV 缓存 (--max-seq)',
     maxSeqHint: '留空则使用模型自身的上下文长度。',
-    diagnostics: '诊断',
+    diagnostics: '诊断标志',
     noFlashAttentionLabel: '禁用 flash attention',
     noFlashAttentionHint: '--no-fa。速度更慢；当驱动或显卡与 flash attention 不兼容时使用。',
     splitCfgLabel: '将 CFG 拆分为两次前向',

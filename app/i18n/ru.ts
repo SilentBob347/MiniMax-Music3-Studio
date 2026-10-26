@@ -1357,7 +1357,7 @@ export const ru = {
     maxBatchFieldHint: 'Движок отклонит запрос, где треков больше этого значения.',
     maxSeqLabel: 'KV-кеш LM (--max-seq)',
     maxSeqHint: 'Пусто — используется собственный контекст модели.',
-    diagnostics: 'Диагностика',
+    diagnostics: 'Флаги диагностики',
     noFlashAttentionLabel: 'Отключить flash attention',
     noFlashAttentionHint: '--no-fa. Медленнее; нужно, если драйвер или карта некорректно работают с flash attention.',
     splitCfgLabel: 'Разделить CFG на два прохода',

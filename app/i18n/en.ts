@@ -1358,7 +1358,7 @@ export const en = {
     maxBatchFieldHint: 'The engine rejects a request whose song count exceeds this.',
     maxSeqLabel: 'LM KV cache (--max-seq)',
     maxSeqHint: "Empty uses the model's own context length.",
-    diagnostics: 'Diagnostics',
+    diagnostics: 'Diagnostic flags',
     noFlashAttentionLabel: 'Disable flash attention',
     noFlashAttentionHint: '--no-fa. Slower; use it when a driver or card misbehaves with flash attention.',
     splitCfgLabel: 'Split CFG into two forwards',
