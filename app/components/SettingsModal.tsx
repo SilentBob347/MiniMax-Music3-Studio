@@ -13,6 +13,7 @@ import { AgentPanel } from './AgentPanel';
 import { FileTagSettings } from './FileTagSettings';
 import { HubSettings } from './HubSettings';
 import { issueReportUrl, type ReportFacts } from '../services/issueReport';
+import { STUDIO_REPO_URL } from '../studio';
 import { useSetupStatus } from '../services/studioQueries';
 import { onSidebarExtras, setSidebarExtras, sidebarExtras, type SidebarExtras } from '../services/playerPanels';
 
@@ -259,10 +260,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, initialSec
                 <div className="space-y-2 border-t border-zinc-200 pt-4 dark:border-zinc-700/50">
                   <p className="font-medium text-zinc-900 dark:text-white">{t('thisStudio')}</p>
                   <div className="flex flex-wrap gap-2">
-                    <a href="https://github.com/timoncool/MiniMax-Music3-Studio" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 rounded-lg bg-zinc-800 px-3 py-1.5 text-xs font-medium text-white dark:bg-zinc-700">
+                    <a href={STUDIO_REPO_URL} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 rounded-lg bg-zinc-800 px-3 py-1.5 text-xs font-medium text-white dark:bg-zinc-700">
                       <SiGithub size={14} />MiniMax Music3 Studio
                     </a>
-                    <a href={issueReportUrl('https://github.com/timoncool/MiniMax-Music3-Studio', __APP_VERSION__, reportFacts)} target="_blank" rel="noopener noreferrer" className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-600 dark:text-zinc-200">{t('reportIssues')}</a>
+                    <a href={issueReportUrl(STUDIO_REPO_URL, __APP_VERSION__, reportFacts)} target="_blank" rel="noopener noreferrer" className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-600 dark:text-zinc-200">{t('reportIssues')}</a>
                   </div>
                 </div>
               </div>

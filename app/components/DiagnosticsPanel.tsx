@@ -3,6 +3,7 @@ import { Bug, Check, Copy, FolderOpen, Loader2, Package, RefreshCw } from 'lucid
 import { useI18n } from '../context/I18nContext';
 import { issueReportUrl, type ReportFacts } from '../services/issueReport';
 import { useSetupStatus } from '../services/studioQueries';
+import { STUDIO_REPO_URL } from '../studio';
 
 type Diagnostics = { text: string };
 
@@ -74,7 +75,7 @@ export const DiagnosticsPanel: React.FC = () => {
         <button type="button" onClick={() => void makePack()} disabled={packing} className={button}>
           {packing ? <Loader2 size={13} className="animate-spin" /> : <Package size={13} />}{t('diagnosticsPack')}
         </button>
-        <a href={issueReportUrl('https://github.com/timoncool/MiniMax-Music3-Studio', __APP_VERSION__, setup.data)} target="_blank" rel="noopener noreferrer" className={button}>
+        <a href={issueReportUrl(STUDIO_REPO_URL, __APP_VERSION__, setup.data)} target="_blank" rel="noopener noreferrer" className={button}>
           <Bug size={13} />{t('diagnosticsReport')}
         </a>
         <button type="button" onClick={revealLogs} className={button}><FolderOpen size={13} />{t('diagnosticsLogs')}</button>
