@@ -88,7 +88,7 @@ const CUDART_BUILD: &str = "12.9.79";
 const CUFFT_BUILD: &str = "11.4.1.4";
 const CUDNN_BUILD: &str = "9.25.0.15";
 const CURAND_BUILD: &str = "10.3.10.19";
-const ONNXRUNTIME_BUILD: &str = "v1.30.0";
+const ONNXRUNTIME_BUILD: &str = "v1.31.0";
 /// The DirectML build of the runtime and the DirectML it is built for.
 const ONNXRUNTIME_DIRECTML_BUILD: &str = "onnxruntime.directml/1.24.4/";
 const DIRECTML_BUILD: &str = "ai.directml/1.15.4/";
@@ -713,11 +713,11 @@ pub const ASSETS: &[Asset] = &[
     #[cfg(windows)]
     Asset {
         id: "onnxruntime-cuda",
-        label: "ONNX Runtime 1.30.0 · CUDA",
+        label: "ONNX Runtime 1.31.0 · CUDA",
         kind: AssetKind::Runtime,
-        url: "https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-win-x64-gpu_cuda12-1.30.0.zip",
+        url: "https://github.com/microsoft/onnxruntime/releases/download/v1.31.0/onnxruntime-win-x64-gpu_cuda12-1.31.0.zip",
         relative_path: "runtime/onnxruntime-cuda.zip",
-        bytes: 379_723_801,
+        bytes: 392_994_831,
         unzip_into: Some("onnx-cuda"),
         marker: "onnxruntime_providers_cuda.dll",
         pick: &[],
@@ -795,11 +795,11 @@ pub const ASSETS: &[Asset] = &[
     #[cfg(windows)]
     Asset {
         id: "onnxruntime",
-        label: "ONNX Runtime 1.30.0",
+        label: "ONNX Runtime 1.31.0",
         kind: AssetKind::Runtime,
-        url: "https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-win-x64-1.30.0.zip",
+        url: "https://github.com/microsoft/onnxruntime/releases/download/v1.31.0/onnxruntime-win-x64-1.31.0.zip",
         relative_path: "runtime/onnxruntime.zip",
-        bytes: 82_645_522,
+        bytes: 82_887_349,
         unzip_into: Some("onnx"),
         marker: "onnxruntime.dll",
         pick: &[],
@@ -809,11 +809,11 @@ pub const ASSETS: &[Asset] = &[
     #[cfg(target_os = "macos")]
     Asset {
         id: "onnxruntime",
-        label: "ONNX Runtime 1.30.0",
+        label: "ONNX Runtime 1.31.0",
         kind: AssetKind::Runtime,
-        url: "https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-osx-arm64-1.30.0.tgz",
+        url: "https://github.com/microsoft/onnxruntime/releases/download/v1.31.0/onnxruntime-osx-arm64-1.31.0.tgz",
         relative_path: "runtime/onnxruntime.tgz",
-        bytes: 42_373_116,
+        bytes: 36_549_009,
         unzip_into: Some("onnx"),
         marker: "libonnxruntime",
         pick: &[],
@@ -857,11 +857,11 @@ pub const ASSETS: &[Asset] = &[
     #[cfg(target_os = "linux")]
     Asset {
         id: "onnxruntime-cuda",
-        label: "ONNX Runtime 1.30.0 · CUDA",
+        label: "ONNX Runtime 1.31.0 · CUDA",
         kind: AssetKind::Runtime,
-        url: "https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-linux-x64-gpu_cuda12-1.30.0.tgz",
+        url: "https://github.com/microsoft/onnxruntime/releases/download/v1.31.0/onnxruntime-linux-x64-gpu_cuda12-1.31.0.tgz",
         relative_path: "runtime/onnxruntime-cuda.tgz",
-        bytes: 439_354_926,
+        bytes: 450_228_883,
         unzip_into: Some("onnx-cuda"),
         marker: "libonnxruntime_providers_cuda.so",
         pick: &[],
@@ -952,11 +952,11 @@ pub const ASSETS: &[Asset] = &[
     #[cfg(target_os = "linux")]
     Asset {
         id: "onnxruntime",
-        label: "ONNX Runtime 1.30.0",
+        label: "ONNX Runtime 1.31.0",
         kind: AssetKind::Runtime,
-        url: "https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-linux-x64-1.30.0.tgz",
+        url: "https://github.com/microsoft/onnxruntime/releases/download/v1.31.0/onnxruntime-linux-x64-1.31.0.tgz",
         relative_path: "runtime/onnxruntime.tgz",
-        bytes: 11_306_877,
+        bytes: 11_408_003,
         unzip_into: Some("onnx"),
         marker: "libonnxruntime.so",
         pick: &[],
@@ -1461,7 +1461,11 @@ impl LyricsSync {
         }
         let (library, card) = self.machine_runtime().ok_or_else(|| anyhow!("the ONNX Runtime library is not installed"))?;
         point_ort_at(&library, card);
-        drop(ort::init_from(&library).map_err(|error| anyhow!("load ONNX Runtime {}: {error}", library.display()))?);
+        // Microsoft's builds send usage telemetry unless the environment turns it off
+        let configured = ort::init_from(&library).map_err(|error| anyhow!("load ONNX Runtime {}: {error}", library.display()))?.with_telemetry(false).commit();
+        if !configured {
+            bail!("ONNX Runtime was set up before its library was bound, so its telemetry could not be turned off");
+        }
         Ok(*BOUND.get_or_init(|| card))
     }
 
