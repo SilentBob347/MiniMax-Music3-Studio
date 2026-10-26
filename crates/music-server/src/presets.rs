@@ -1,4 +1,6 @@
-use std::{process::Command, sync::OnceLock};
+#[cfg(any(windows, target_os = "macos"))]
+use std::process::Command;
+use std::sync::OnceLock;
 
 use music_core::{Capability, ExecutionMode, StudioConfiguration};
 use serde::Serialize;

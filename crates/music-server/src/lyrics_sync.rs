@@ -72,9 +72,13 @@ impl LyricsSyncConfig {
     }
 }
 
-/// The audio.cpp server is pinned to its release tag, its cuFFT for CUDA 13 to its version.
+/// The audio.cpp server is pinned to its release tag, the CUDA 13 libraries it does not carry to their versions.
 const AUDIOCPP_BUILD: &str = "/audio.cpp/releases/download/server-";
 const SERVER_CUFFT_BUILD: &str = "12.4.0.43";
+#[cfg(target_os = "linux")]
+const SERVER_CUDART_BUILD: &str = "13.4.92";
+#[cfg(target_os = "linux")]
+const SERVER_CUBLAS_BUILD: &str = "13.8.0.4";
 /// The ONNX Runtime that Parakeet loads. Mixing versions deadlocks the loader,
 /// so this is pinned exactly as Dub Studio pins it.
 /// The NVIDIA libraries the CUDA provider links against, pinned like the rest.
@@ -168,8 +172,7 @@ fn heard_words(transcript: &acpp_server::Transcript) -> Vec<(f64, String)> {
 }
 
 /// The build of audio.cpp's server karaoke runs on for `runtime`: the processor when it is chosen; else the card's
-/// CUDA build on Windows, Vulkan on a card CUDA does not run (AMD, Intel) and on Linux, where the music engine is
-/// Vulkan too and ships no cuBLAS 13, the processor without a card; a Mac its Metal program.
+/// CUDA build, Vulkan on a card CUDA does not run (AMD, Intel), the processor without a card; a Mac its Metal program.
 pub fn crisper_build(runtime: OnnxFlavour) -> Result<acpp_server::asset::Build> {
     use acpp_server::asset::Build;
     if let Some(mac) = Build::for_this_mac() {
@@ -182,8 +185,8 @@ pub fn crisper_build(runtime: OnnxFlavour) -> Result<acpp_server::asset::Build> 
         return Ok(Build::Cpu);
     }
     Ok(match crate::cuda_build::current() {
-        Some(crate::cuda_build::CudaBuild::Cuda13) if cfg!(windows) => Build::Cuda13,
-        Some(crate::cuda_build::CudaBuild::Cuda12) if cfg!(windows) => Build::Cuda12,
+        Some(crate::cuda_build::CudaBuild::Cuda13) => Build::Cuda13,
+        Some(crate::cuda_build::CudaBuild::Cuda12) => Build::Cuda12,
         _ if crate::presets::display_card().is_some() => Build::Vulkan,
         _ => Build::Cpu,
     })
@@ -195,7 +198,9 @@ pub fn crisper_assets(runtime: OnnxFlavour) -> Vec<&'static str> {
     use acpp_server::asset::Build;
     let Ok(build) = crisper_build(runtime) else { return Vec::new() };
     let server: &[&str] = match build {
-        Build::Cuda13 => &["audiocpp-cuda13", "audiocpp-cuda13-cufft"],
+        // on Windows the CUDA 13 server takes the music engine's cuBLAS 13
+        Build::Cuda13 if cfg!(windows) => &["audiocpp-cuda13", "audiocpp-cuda13-cufft"],
+        Build::Cuda13 => &["audiocpp-cuda13", "audiocpp-cuda13-cudart", "audiocpp-cuda13-cublas", "audiocpp-cuda13-cufft"],
         Build::Cuda12 => &["audiocpp-cuda12", "audiocpp-cuda12-cudart", "audiocpp-cuda12-cublas", "audiocpp-cuda12-cufft"],
         Build::Vulkan => &["audiocpp-vulkan"],
         Build::Cpu => &["audiocpp-cpu"],
@@ -215,7 +220,7 @@ fn unload_crisper() {
 pub const ASSETS: &[Asset] = &[
     // CrisperWhisper runs in audio.cpp's server, the build of the card or the processor; the archives and CUDA
     // libraries are the shared client's pins (acpp_server::asset), one folder a build as Dub Studio and Speech Studio
-    // lay them out. On Linux the music engine is Vulkan and ships no cuBLAS 13, so the server is too.
+    // lay them out.
     #[cfg(windows)]
     Asset {
         id: "audiocpp-cuda13",
@@ -328,6 +333,120 @@ pub const ASSETS: &[Asset] = &[
         vram_gb: None,
         note: "Runs CrisperWhisper on the processor: slower, the same words.",
     },
+    // Linux: the CUDA libraries of each CUDA build from NVIDIA's manylinux wheels, as Dub Studio and Speech Studio
+    // take them, unpacked beside the server, where its RUNPATH ($ORIGIN) finds them.
+    #[cfg(target_os = "linux")]
+    Asset {
+        id: "audiocpp-cuda13",
+        label: "audio.cpp server (CUDA 13)",
+        kind: AssetKind::Runtime,
+        url: acpp_server::asset::SERVER_LINUX_CUDA13.url,
+        relative_path: "runtime/audiocpp-cuda13.tar.gz",
+        bytes: acpp_server::asset::SERVER_LINUX_CUDA13.size,
+        unzip_into: Some(acpp_server::asset::Build::Cuda13.folder()),
+        marker: "audiocpp_server",
+        pick: &[],
+        vram_gb: None,
+        note: "Runs CrisperWhisper on an NVIDIA card from the GTX 16 and RTX 20 series on.",
+    },
+    #[cfg(target_os = "linux")]
+    Asset {
+        id: "audiocpp-cuda13-cudart",
+        label: "NVIDIA CUDA runtime 13.4 (for the audio.cpp server)",
+        kind: AssetKind::Runtime,
+        url: "https://files.pythonhosted.org/packages/98/8a/3431271f6344874b8f1ac03f16b3d679c91493f8da63f716160403e6d0a0/nvidia_cuda_runtime-13.4.92-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+        relative_path: "runtime/audiocpp-cuda13-cudart.whl",
+        bytes: 2_494_438,
+        unzip_into: Some(acpp_server::asset::Build::Cuda13.folder()),
+        marker: "libcudart.so.13",
+        pick: &["libcudart.so.13"],
+        vram_gb: None,
+        note: "Part of the CUDA 13 server.",
+    },
+    #[cfg(target_os = "linux")]
+    Asset {
+        id: "audiocpp-cuda13-cublas",
+        label: "NVIDIA cuBLAS 13.8 (for the audio.cpp server)",
+        kind: AssetKind::Runtime,
+        url: "https://files.pythonhosted.org/packages/7a/38/bdd540bf511d2c9b6f9efc71a81c60cb88e295be0b9312b61d19bbed2212/nvidia_cublas-13.8.0.4-py3-none-manylinux_2_27_x86_64.whl",
+        relative_path: "runtime/audiocpp-cuda13-cublas.whl",
+        bytes: 439_317_144,
+        unzip_into: Some(acpp_server::asset::Build::Cuda13.folder()),
+        marker: "libcublasLt.so.13",
+        pick: &["libcublas.so.13", "libcublasLt.so.13"],
+        vram_gb: None,
+        note: "Part of the CUDA 13 server.",
+    },
+    #[cfg(target_os = "linux")]
+    Asset {
+        id: "audiocpp-cuda13-cufft",
+        label: "NVIDIA cuFFT 12.4 (for the audio.cpp server)",
+        kind: AssetKind::Runtime,
+        url: "https://files.pythonhosted.org/packages/76/bf/3fea3d1c6262bded26ae00e3106432d63235954965d7785f5051ac146651/nvidia_cufft-12.4.0.43-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+        relative_path: "runtime/audiocpp-cuda13-cufft.whl",
+        bytes: 161_750_089,
+        unzip_into: Some(acpp_server::asset::Build::Cuda13.folder()),
+        marker: "libcufft.so.12",
+        pick: &["libcufft.so.12"],
+        vram_gb: None,
+        note: "Part of the CUDA 13 server.",
+    },
+    #[cfg(target_os = "linux")]
+    Asset {
+        id: "audiocpp-cuda12",
+        label: "audio.cpp server (CUDA 12)",
+        kind: AssetKind::Runtime,
+        url: acpp_server::asset::SERVER_LINUX_CUDA12.url,
+        relative_path: "runtime/audiocpp-cuda12.tar.gz",
+        bytes: acpp_server::asset::SERVER_LINUX_CUDA12.size,
+        unzip_into: Some(acpp_server::asset::Build::Cuda12.folder()),
+        marker: "audiocpp_server",
+        pick: &[],
+        vram_gb: None,
+        note: "Runs CrisperWhisper on the NVIDIA cards and drivers CUDA 13 does not.",
+    },
+    #[cfg(target_os = "linux")]
+    Asset {
+        id: "audiocpp-cuda12-cudart",
+        label: "NVIDIA CUDA runtime 12.9 (for the audio.cpp server)",
+        kind: AssetKind::Runtime,
+        url: "https://files.pythonhosted.org/packages/bc/46/a92db19b8309581092a3add7e6fceb4c301a3fd233969856a8cbf042cd3c/nvidia_cuda_runtime_cu12-12.9.79-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+        relative_path: "runtime/audiocpp-cuda12-cudart.whl",
+        bytes: 3_493_179,
+        unzip_into: Some(acpp_server::asset::Build::Cuda12.folder()),
+        marker: "libcudart.so.12",
+        pick: &["libcudart.so.12"],
+        vram_gb: None,
+        note: "Part of the CUDA 12 server.",
+    },
+    #[cfg(target_os = "linux")]
+    Asset {
+        id: "audiocpp-cuda12-cublas",
+        label: "NVIDIA cuBLAS 12.9 (for the audio.cpp server)",
+        kind: AssetKind::Runtime,
+        url: "https://files.pythonhosted.org/packages/cb/c0/0a517bfe63ccd3b92eb254d264e28fca3c7cab75d07daea315250fb1bf73/nvidia_cublas_cu12-12.9.2.10-py3-none-manylinux_2_27_x86_64.whl",
+        relative_path: "runtime/audiocpp-cuda12-cublas.whl",
+        bytes: 581_240_110,
+        unzip_into: Some(acpp_server::asset::Build::Cuda12.folder()),
+        marker: "libcublasLt.so.12",
+        pick: &["libcublas.so.12", "libcublasLt.so.12"],
+        vram_gb: None,
+        note: "Part of the CUDA 12 server.",
+    },
+    #[cfg(target_os = "linux")]
+    Asset {
+        id: "audiocpp-cuda12-cufft",
+        label: "NVIDIA cuFFT 11.4 (for the audio.cpp server)",
+        kind: AssetKind::Runtime,
+        url: "https://files.pythonhosted.org/packages/95/f4/61e6996dd20481ee834f57a8e9dca28b1869366a135e0d42e2aa8493bdd4/nvidia_cufft_cu12-11.4.1.4-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+        relative_path: "runtime/audiocpp-cuda12-cufft.whl",
+        bytes: 200_877_592,
+        unzip_into: Some(acpp_server::asset::Build::Cuda12.folder()),
+        marker: "libcufft.so.11",
+        pick: &["libcufft.so.11"],
+        vram_gb: None,
+        note: "Part of the CUDA 12 server.",
+    },
     #[cfg(target_os = "linux")]
     Asset {
         id: "audiocpp-vulkan",
@@ -340,7 +459,7 @@ pub const ASSETS: &[Asset] = &[
         marker: "audiocpp_server",
         pick: &[],
         vram_gb: None,
-        note: "Runs CrisperWhisper on the graphics card, as the music engine does on Linux.",
+        note: "Runs CrisperWhisper on an AMD or Intel card.",
     },
     #[cfg(target_os = "linux")]
     Asset {
@@ -1986,7 +2105,12 @@ Third");
                 // Every runtime is pinned to an exact release - the audio.cpp server to its tag, ONNX Runtime to its
                 // version, NVIDIA's libraries to their own version in the archive name - so a working setup keeps
                 // working.
+                #[cfg(target_os = "linux")]
+                let server_libraries = entry.url.contains(SERVER_CUDART_BUILD) || entry.url.contains(SERVER_CUBLAS_BUILD);
+                #[cfg(not(target_os = "linux"))]
+                let server_libraries = false;
                 let pinned = entry.url.contains(AUDIOCPP_BUILD)
+                    || server_libraries
                     || entry.url.contains(SERVER_CUFFT_BUILD)
                     || entry.url.contains(ONNXRUNTIME_BUILD)
                     || entry.url.contains(ONNXRUNTIME_DIRECTML_BUILD)
