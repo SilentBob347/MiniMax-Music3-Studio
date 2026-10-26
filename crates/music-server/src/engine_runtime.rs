@@ -17,7 +17,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 
 use crate::cuda_build::CudaBuild;
 use crate::downloads::{Asset, AssetKind, Downloader};
@@ -33,9 +33,6 @@ pub const CUDA12_LIBRARIES: [&str; 2] = ["cublas64_12.dll", "cublasLt64_12.dll"]
 /// onnxruntime.dll imports msvcp140_1.dll.
 pub const VC_RUNTIME_LIBRARIES: [&str; 5] =
     ["vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "msvcp140_1.dll", "vcomp140.dll"];
-
-/// Microsoft's own permanent link to the current x64 redistributable.
-const VC_REDIST_URL: &str = "https://aka.ms/vs/17/release/vc_redist.x64.exe";
 
 #[cfg(test)]
 pub const ASSETS: &[Asset] = &[CUBLAS13, CUBLAS12];
@@ -88,6 +85,8 @@ pub fn cublas_asset(build: CudaBuild) -> &'static Asset {
 /// The engine's downloadable runtime.
 pub struct EngineRuntime {
     downloader: Downloader,
+    /// Where the engine and the Visual C++ runtime shipped with it live.
+    bundle_root: PathBuf,
 }
 
 impl EngineRuntime {
@@ -107,7 +106,7 @@ impl EngineRuntime {
             }
             elsewhere
         };
-        Self { downloader: Downloader::new(root) }
+        Self { downloader: Downloader::new(root), bundle_root: bundle_root.to_path_buf() }
     }
 
     pub fn downloader(&self) -> &Downloader {
@@ -126,7 +125,27 @@ impl EngineRuntime {
     /// the engine, and checking only the downloads would have skipped the
     /// install entirely.
     pub fn is_ready(&self, build: CudaBuild) -> bool {
-        self.missing(build).is_empty() && vc_runtime_present()
+        self.missing(build).is_empty() && self.vc_runtime_missing().is_empty()
+    }
+
+    /// The Visual C++ runtime ships inside the engine bundle, app-local as
+    /// Microsoft permits, so the studio never installs anything into the
+    /// system. A machine that has it on its search path is fine either way.
+    #[cfg(windows)]
+    pub fn vc_runtime_missing(&self) -> Vec<&'static str> {
+        VC_RUNTIME_LIBRARIES
+            .iter()
+            .copied()
+            .filter(|library| !self.bundle_root.join(library).is_file() && !is_on_the_search_path(library))
+            .collect()
+    }
+
+    /// Off Windows the engine is built against the platform's own runtime
+    /// (libc++ and the system libraries), which is always present: nothing to
+    /// check, nothing to fetch.
+    #[cfg(not(windows))]
+    pub fn vc_runtime_missing(&self) -> Vec<&'static str> {
+        Vec::new()
     }
 
     /// What is still missing, so a caller can report the size before starting.
@@ -144,62 +163,11 @@ impl EngineRuntime {
 
     /// Fetches whatever is missing and waits for it.
     pub async fn install_missing(&self, build: CudaBuild) -> Result<()> {
-        ensure_vc_runtime().await?;
+        let absent = self.vc_runtime_missing();
+        if !absent.is_empty() {
+            bail!("the engine bundle is incomplete: {} missing beside the engine; reinstall the studio", absent.join(", "));
+        }
         self.downloader.install_all("engine", &self.missing(build)).await
-    }
-}
-
-/// Whether the Visual C++ runtime the engine needs is already installed.
-///
-/// Almost every Windows machine has it - some game or application put it there
-/// years ago - so this is checked, not assumed in either direction.
-#[cfg(windows)]
-pub fn vc_runtime_present() -> bool {
-    VC_RUNTIME_LIBRARIES.iter().all(|library| is_on_the_search_path(library))
-}
-
-/// Off Windows the engine is built against the platform's own runtime (libc++
-/// and the system libraries), which is always present: nothing to check.
-#[cfg(not(windows))]
-pub fn vc_runtime_present() -> bool {
-    true
-}
-
-/// Installs Microsoft's redistributable when, and only when, it is missing.
-///
-/// This is the ordinary way an application ships against the Visual C++
-/// runtime: Microsoft publishes one installer at a permanent link, and it is
-/// run once. It asks for administrator rights, shows its own progress, and
-/// returns 3010 when it wants a restart - which is a success, not a failure.
-pub async fn ensure_vc_runtime() -> Result<()> {
-    if !cfg!(windows) || vc_runtime_present() {
-        return Ok(());
-    }
-    let installer = std::env::temp_dir().join("vc_redist.x64.exe");
-    let bytes = crate::net::download_client()
-        .get(VC_REDIST_URL)
-        .send()
-        .await
-        .context("download the Visual C++ redistributable")?
-        .error_for_status()
-        .context("download the Visual C++ redistributable")?
-        .bytes()
-        .await
-        .context("read the Visual C++ redistributable")?;
-    std::fs::write(&installer, &bytes).with_context(|| format!("write {}", installer.display()))?;
-
-    let status = tokio::task::spawn_blocking(move || {
-        std::process::Command::new(&installer).args(["/install", "/passive", "/norestart"]).status()
-    })
-    .await
-    .context("run the Visual C++ redistributable")?
-    .context("run the Visual C++ redistributable")?;
-    match status.code() {
-        // 0: installed. 1638: a newer one is already there. 3010: installed,
-        // wants a restart it will not get from us and does not need.
-        Some(0) | Some(1638) | Some(3010) => Ok(()),
-        Some(code) => bail!("the Visual C++ redistributable installer ended with {code}"),
-        None => bail!("the Visual C++ redistributable installer was interrupted"),
     }
 }
 
@@ -300,5 +268,23 @@ mod tests {
             assert_eq!(runtime.missing(CudaBuild::Cuda12).len(), 1);
         }
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// The Visual C++ runtime counts as present beside the engine, and the
+    /// runtime script stages every library of the list there.
+    #[test]
+    fn the_visual_cpp_runtime_ships_beside_the_engine() {
+        let root = std::env::temp_dir().join(format!("engine-vc-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&root).unwrap();
+        for library in VC_RUNTIME_LIBRARIES {
+            std::fs::write(root.join(library), b"x").unwrap();
+        }
+        assert!(EngineRuntime::new(&root, &root).vc_runtime_missing().is_empty());
+        std::fs::remove_dir_all(&root).ok();
+
+        let script = include_str!("../../../scripts/build-minimax-runtime.ps1");
+        for library in VC_RUNTIME_LIBRARIES {
+            assert!(script.contains(&format!("'{library}'")), "the runtime script does not stage {library}");
+        }
     }
 }

@@ -4651,9 +4651,12 @@ async fn restart_engine(state: &AppState) -> Result<(), String> {
                     .map_err(|error| format!("the engine's CUDA libraries could not be downloaded: {error}"))?;
             }
             Some(_) => {}
-            None => engine_runtime::ensure_vc_runtime()
-                .await
-                .map_err(|error| format!("the Visual C++ runtime could not be installed: {error}"))?,
+            None => {
+                let absent = state.engine_runtime.vc_runtime_missing();
+                if !absent.is_empty() {
+                    return Err(format!("the engine bundle is incomplete: {} missing beside the engine; reinstall the studio", absent.join(", ")));
+                }
+            }
         }
         // The engine loads eleven gigabytes of weights the moment it starts.
         // If the writing assistant is still holding the card, it does not finish.
@@ -5461,7 +5464,7 @@ async fn compose_setup_status(state: &AppState, manager_status: model_manager::M
             serde_json::json!({
                 "ready": match runtime_build {
                     Some(build) => state.engine_runtime.is_ready(build),
-                    None => engine_runtime::vc_runtime_present(),
+                    None => state.engine_runtime.vc_runtime_missing().is_empty(),
                 },
                 "downloading": runtime_active.is_some(),
                 "downloaded_bytes": runtime_active.as_ref().map(|progress| progress.downloaded_bytes).unwrap_or(0),

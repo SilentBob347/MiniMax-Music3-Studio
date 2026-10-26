@@ -440,20 +440,21 @@ mm-server.exe
   ├─ ggml.dll → ggml-base.dll, ggml-cpu.dll, ggml-cuda.dll     shipped inside the app
   │                               └─ cublas64_13.dll, cublasLt64_13.dll   downloaded once
   │                               └─ nvcuda.dll                           your NVIDIA driver
-  └─ vcruntime140.dll, msvcp140.dll, vcomp140.dll              Visual C++ runtime
+  └─ vcruntime140.dll, vcruntime140_1.dll, msvcp140.dll,       Visual C++ runtime,
+     msvcp140_1.dll, vcomp140.dll                               shipped inside the app
 ```
 
 **Shipped inside the app.** `mm-server.exe`, the four `ggml*.dll` files and
 `neural-codec.exe` are part of every release, in `resources\minimaxmusic-cpp\` beside the
 main executable. They are built from the pinned `minimaxmusic.cpp` commit and never
-downloaded.
+downloaded. The Visual C++ runtime the engine and ONNX Runtime import lies there too,
+app-local as Microsoft's redistribution terms allow, so nothing is installed into Windows.
 
 **Downloaded once, on the first engine start.**
 
 | File(s) | Where from | Size | Why |
 | --- | --- | --- | --- |
 | `cublas64_13.dll`, `cublasLt64_13.dll` | NVIDIA's redistributable [`libcublas-windows-x86_64-13.5.1.27-archive.zip`](https://developer.download.nvidia.com/compute/cuda/redist/libcublas/windows-x86_64/libcublas-windows-x86_64-13.5.1.27-archive.zip) | 391 MB (zip) | The CUDA linear-algebra library `ggml-cuda.dll` is linked against. Too large, and under NVIDIA's own licence, to bundle — so it comes straight from NVIDIA. This is the **NVIDIA cuBLAS 13.5** item in the model panel. |
-| Visual C++ 2015–2022 runtime | Microsoft's permanent link [`vc_redist.x64.exe`](https://aka.ms/vs/17/release/vc_redist.x64.exe) | small installer | The C++ runtime the engine is compiled against. Run **only** when the DLLs are missing — most Windows machines already have it. |
 
 **Never downloaded.** `nvcuda.dll` is part of your NVIDIA driver; if the engine complains
 about it, update the driver. A machine that already has the CUDA Toolkit installed has
@@ -468,8 +469,7 @@ You can place the CUDA libraries by hand:
    `cublasLt64_13.dll`.
 3. Drop both **next to `mm-server.exe`** — the `resources\minimaxmusic-cpp\` folder beside
    the app's main `.exe`.
-4. If the engine still won't start, install the Visual C++ runtime from the Microsoft link,
-   and make sure your NVIDIA driver is current.
+4. If the engine still won't start, make sure your NVIDIA driver is current.
 
 On startup the engine reads its own import table and fetches only what is genuinely
 missing, so a hand-placed DLL is simply found and used.
