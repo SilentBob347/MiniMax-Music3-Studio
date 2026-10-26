@@ -4,6 +4,9 @@ export type Music3Component = {
   filename: string;
   bytes: number;
   sha256: string;
+  /** The file at its pinned revision on Hugging Face, and the same on HF-Mirror. */
+  url?: string;
+  mirror_url?: string;
 };
 
 export const MUSIC3_COMPONENT_KINDS = ['lm', 'depth', 'condition', 'dit', 'vocoder'] as const;
