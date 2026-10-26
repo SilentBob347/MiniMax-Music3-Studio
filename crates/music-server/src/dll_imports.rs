@@ -212,9 +212,15 @@ pub fn bundle_loads(resources: &Path, engine_libraries: &[PathBuf]) -> Vec<Load>
     loads
 }
 
-/// Whether a pin record names this address: the record the studio writes beside a runtime it fetched.
+/// Whether the install record the studio writes beside a download it fetched names this address.
 fn recorded(record: &Path, url: &str) -> bool {
-    std::fs::read_to_string(record).is_ok_and(|text| text.trim() == url)
+    crate::install_record::read(record).is_some_and(|parsed| parsed.url == url)
+}
+
+/// The folder a recorded download put its first file in.
+fn recorded_folder(record: &Path, root: &Path) -> Option<PathBuf> {
+    let parsed = crate::install_record::read(record)?;
+    root.join(&parsed.files.first()?.path).parent().map(Path::to_path_buf)
 }
 
 /// The SHA-256 of a file, read in pieces.
@@ -240,7 +246,8 @@ struct Unit {
     name: &'static str,
     ids: Vec<&'static str>,
     urls: Vec<&'static str>,
-    records: Box<dyn Fn(&Path) -> Vec<PathBuf>>,
+    /// Each asset's install record and the root its files are recorded under.
+    records: Box<dyn Fn(&Path) -> Vec<(PathBuf, PathBuf)>>,
 }
 
 impl Unit {
@@ -254,7 +261,7 @@ impl Unit {
             records: Box::new(move |root| {
                 downloader(root)
                     .into_iter()
-                    .flat_map(|downloader| assets.iter().map(move |asset| downloader.source_record(asset)).collect::<Vec<_>>())
+                    .flat_map(|downloader| assets.iter().map(move |asset| (downloader.record_of(asset), downloader.root().to_path_buf())).collect::<Vec<_>>())
                     .collect()
             }),
         }
@@ -267,8 +274,8 @@ impl Unit {
             // a downloader that offers several places (the engine's folder or the data folder) gives one record per
             // asset per place; the unit is found when one place holds every record
             for place in records.chunks(self.urls.len()) {
-                if place.iter().zip(&self.urls).all(|(record, url)| recorded(record, url)) {
-                    return place.first().and_then(|record| record.parent()).map(Path::to_path_buf);
+                if place.iter().zip(&self.urls).all(|((record, _), url)| recorded(record, url)) {
+                    return place.first().and_then(|(record, root)| recorded_folder(record, root));
                 }
             }
         }
@@ -334,17 +341,21 @@ mod tests {
         assert!(VC_RUNTIME_LIBRARIES.iter().all(|library| is_vc_runtime(library)));
     }
 
-    /// A record of another pin, or none, is not the pin.
+    /// A record of another pin, or none, is not the pin; a record names the folder its archive unpacked into.
     #[test]
     fn only_a_record_of_the_pin_counts() {
         let folder = std::env::temp_dir().join(format!("dll-imports-{}", uuid::Uuid::now_v7()));
-        std::fs::create_dir_all(&folder).unwrap();
-        let record = folder.join(".source-x");
+        let unpacked = folder.join("runtime").join("cuda");
+        std::fs::create_dir_all(&unpacked).unwrap();
+        let library = unpacked.join("x.dll");
+        std::fs::write(&library, b"x").unwrap();
+        let record = crate::install_record::record_path(&folder.join("x.zip"));
         assert!(!recorded(&record, "https://example.invalid/b1/x.zip"));
-        std::fs::write(&record, "https://example.invalid/b0/x.zip").unwrap();
+        crate::install_record::write(&record, "https://example.invalid/b0/x.zip", "", &[library.clone()], &folder).unwrap();
         assert!(!recorded(&record, "https://example.invalid/b1/x.zip"));
-        std::fs::write(&record, "https://example.invalid/b1/x.zip\n").unwrap();
+        crate::install_record::write(&record, "https://example.invalid/b1/x.zip", "", &[library], &folder).unwrap();
         assert!(recorded(&record, "https://example.invalid/b1/x.zip"));
+        assert_eq!(recorded_folder(&record, &folder), Some(unpacked), "the folder the archive unpacked into");
         std::fs::remove_dir_all(&folder).ok();
     }
 
@@ -498,7 +509,7 @@ mod tests {
                 urls: assets.iter().map(|asset| asset.url).collect(),
                 records: Box::new(move |root| {
                     let runtime = crate::assistant_runtime::AssistantRuntime::new(root);
-                    assets.iter().filter_map(|asset| runtime.source_record(*asset)).collect()
+                    assets.iter().map(|asset| (runtime.record_of(asset), runtime.root().to_path_buf())).collect()
                 }),
             };
             if let Some(folder) = found(&unit, &mut skipped) {

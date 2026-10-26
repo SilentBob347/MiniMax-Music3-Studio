@@ -20,6 +20,7 @@ mod cuda_build;
 #[cfg(all(test, windows))]
 mod dll_imports;
 mod engine_runtime;
+mod install_record;
 mod lyrics_db;
 mod mcp;
 mod lyrics_sync;
