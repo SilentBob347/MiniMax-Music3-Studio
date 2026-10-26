@@ -207,8 +207,8 @@ fn reveal(path: &Path, select: bool) -> std::io::Result<()> {
     #[cfg(windows)]
     {
         let mut explorer = std::process::Command::new("explorer.exe");
-        if select { explorer.arg(format!("/select,{}", path.display())) } else { explorer.arg(path) };
-        explorer.spawn().map(|_| ())
+        if select { std::os::windows::process::CommandExt::raw_arg(&mut explorer, format!("/select,\"{}\"", path.display())) } else { explorer.arg(path) };
+        music_engine::process_group::detach_from_group(&mut explorer).spawn().map(|_| ())
     }
     #[cfg(target_os = "macos")]
     {
