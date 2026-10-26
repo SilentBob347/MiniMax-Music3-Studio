@@ -429,6 +429,18 @@ mod tests {
         assert_eq!(proxy_for(&off, &system, &url("https://huggingface.co/x")), None);
     }
 
+    /// Under the system's settings a host its NO_PROXY names goes straight out,
+    /// and the rest through the system's proxy.
+    #[test]
+    fn a_host_the_system_excludes_goes_straight_out() {
+        let system = Matcher::builder().https("http://127.0.0.1:9").http("http://127.0.0.1:9").no("hf-mirror.com, .example.org").build();
+        let settings = ProxySettings::default();
+        assert_eq!(settings.mode, ProxyMode::System);
+        assert_eq!(proxy_for(&settings, &system, &url("https://hf-mirror.com/api/models?limit=1")), None);
+        assert_eq!(proxy_for(&settings, &system, &url("https://cdn.example.org/x")), None);
+        assert!(proxy_for(&settings, &system, &url("https://huggingface.co/api/models?limit=1")).is_some());
+    }
+
     #[test]
     fn the_window_gets_the_proxy_without_its_login() {
         let window = |settings: ProxySettings| settings.window_proxy().map(|url| url.to_string());
