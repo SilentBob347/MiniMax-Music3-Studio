@@ -17,8 +17,9 @@ mod audio_pcm;
 mod legacy_text;
 mod downloads;
 mod cuda_build;
-#[cfg(all(test, windows))]
+#[cfg(windows)]
 mod dll_imports;
+mod diagnostics;
 mod engine_runtime;
 mod install_record;
 mod lyrics_db;
@@ -1125,6 +1126,10 @@ pub async fn serve() -> anyhow::Result<()> {
         .route("/setup/remove", post(setup_remove))
         .route("/setup/adopt", post(setup_adopt))
         .route("/v1/open-data-directory", post(open_data_directory))
+        .route("/v1/diagnostics", get(diagnostics::get))
+        .route("/v1/diagnostics/report", post(diagnostics::make_report))
+        .route("/v1/diagnostics/report/reveal", post(diagnostics::reveal_report))
+        .route("/v1/diagnostics/logs/reveal", post(diagnostics::reveal_logs))
         .route("/setup/select", post(setup_select))
         .route("/setup/cancel", post(setup_cancel))
         .route("/v1/local-models/music", get(local_music_model_catalog))

@@ -4,7 +4,7 @@
 //! program's own folder comes first; a library loaded into a running process by its full path is not searched for
 //! in its own folder but in the process's (the "Dynamic-link library search order" of Windows), unless it is
 //! loaded with `LOAD_WITH_ALTERED_SEARCH_PATH`. Whatever is not found there has to be a part of Windows, come with
-//! the display driver, or be the Visual C++ runtime the studio installs and checks by name.
+//! the display driver, or be the Visual C++ runtime the studio ships beside the engine and checks by name.
 //!
 //! The staged installer bundle is checked by an ordinary test whenever it is there; the runtimes the studio
 //! downloads are checked where they already lie on this computer, at their pins, by `scripts/check-dll-imports.ps1`.
@@ -118,6 +118,7 @@ pub struct Load {
 
 impl Load {
     /// A program: its imports are found beside it first, then in `more`.
+    #[cfg(test)]
     fn program(entry: PathBuf, more: &[PathBuf]) -> Self {
         let mut search: Vec<PathBuf> = entry.parent().map(Path::to_path_buf).into_iter().collect();
         search.extend(more.iter().cloned());
@@ -191,20 +192,12 @@ fn folder_loads(folder: &Path, more: &[PathBuf]) -> Vec<Load> {
         .collect()
 }
 
+#[cfg(test)]
 /// The installer's bundle: the engine folder (`mm-server.exe`, `neural-codec.exe`, every ggml backend beside them
 /// and the CUDA backends in their sub-folders, loaded by the engine and resolved from its folder) and the VST host.
 /// `engine_libraries` are where the studio's cuBLAS lies when it is not in the engine folder itself.
 pub fn bundle_loads(resources: &Path, engine_libraries: &[PathBuf]) -> Vec<Load> {
-    let engine = resources.join("minimaxmusic-cpp");
-    let mut process = vec![engine.clone()];
-    process.extend(engine_libraries.iter().cloned());
-    let mut loads = folder_loads(&engine, engine_libraries);
-    for build in [crate::cuda_build::CudaBuild::Cuda13, crate::cuda_build::CudaBuild::Cuda12] {
-        let backend = engine.join(build.folder()).join("ggml-cuda.dll");
-        if backend.is_file() {
-            loads.push(Load::in_process(backend, &process));
-        }
-    }
+    let mut loads = engine_loads(&resources.join("minimaxmusic-cpp"), engine_libraries);
     let vst = resources.join("vst-host").join("vst-host.exe");
     if vst.is_file() {
         loads.push(Load::program(vst, &[]));
@@ -212,17 +205,34 @@ pub fn bundle_loads(resources: &Path, engine_libraries: &[PathBuf]) -> Vec<Load>
     loads
 }
 
+/// The engine folder alone: its programs and libraries, and the CUDA backends the engine loads from its sub-folders.
+pub fn engine_loads(engine: &Path, engine_libraries: &[PathBuf]) -> Vec<Load> {
+    let mut process = vec![engine.to_path_buf()];
+    process.extend(engine_libraries.iter().cloned());
+    let mut loads = folder_loads(engine, engine_libraries);
+    for build in [crate::cuda_build::CudaBuild::Cuda13, crate::cuda_build::CudaBuild::Cuda12] {
+        let backend = engine.join(build.folder()).join("ggml-cuda.dll");
+        if backend.is_file() {
+            loads.push(Load::in_process(backend, &process));
+        }
+    }
+    loads
+}
+
+#[cfg(test)]
 /// Whether the install record the studio writes beside a download it fetched names this address.
 fn recorded(record: &Path, url: &str) -> bool {
     crate::install_record::read(record).is_some_and(|parsed| parsed.url == url)
 }
 
+#[cfg(test)]
 /// The folder a recorded download put its first file in.
 fn recorded_folder(record: &Path, root: &Path) -> Option<PathBuf> {
     let parsed = crate::install_record::read(record)?;
     root.join(&parsed.files.first()?.path).parent().map(Path::to_path_buf)
 }
 
+#[cfg(test)]
 /// The SHA-256 of a file, read in pieces.
 fn sha256_of(path: &Path) -> Result<String> {
     use sha2::Digest;
@@ -240,6 +250,7 @@ fn sha256_of(path: &Path) -> Result<String> {
     Ok(digest.finalize().iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
+#[cfg(test)]
 /// Runtimes that unpack into one folder and only work together there: (name, the assets, where each one's pin record
 /// is under a data folder). The first data folder that holds every record at its pin is the one checked.
 struct Unit {
@@ -250,6 +261,7 @@ struct Unit {
     records: Box<dyn Fn(&Path) -> Vec<(PathBuf, PathBuf)>>,
 }
 
+#[cfg(test)]
 impl Unit {
     fn of_downloader(name: &'static str, assets: Vec<&'static crate::downloads::Asset>, downloader: fn(&Path) -> Vec<crate::downloads::Downloader>) -> Self {
         let ids = assets.iter().map(|asset| asset.id).collect();
@@ -283,6 +295,7 @@ impl Unit {
     }
 }
 
+#[cfg(test)]
 /// A transcribe.cpp build on this computer whose size and SHA-256 are the pin's: in a studio's karaoke folder, in
 /// Dub Studio's or Speech Studio's models folder, or in a build folder (`<backend>/bin`).
 fn local_tcpp(build: dub_tcpp::Build, roots: &[PathBuf]) -> Result<Option<PathBuf>> {
