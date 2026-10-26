@@ -54,6 +54,7 @@ mod openrouter_stream;
 mod progress;
 mod engine_log;
 mod song_errors;
+mod retired;
 
 use song_errors::SongError;
 
@@ -956,9 +957,8 @@ pub async fn serve() -> anyhow::Result<()> {
         }
     }
     state.lyrics_sync.set_cuda_libraries(state.engine_runtime.library_dir());
-    {
-        let sync = state.lyrics_sync.clone();
-        tokio::task::spawn_blocking(move || sync.remove_retired_parakeet());
+    if let Some(data_root) = studio_data_root() {
+        tokio::task::spawn_blocking(move || retired::remove_retired(&data_root));
     }
     prepare::resume(&state);
     tokio::spawn(resume_unfinished_jobs(state.clone()));
