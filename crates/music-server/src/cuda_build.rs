@@ -138,6 +138,43 @@ pub fn current() -> Option<CudaBuild> {
     device().and_then(|(compute, driver)| cuda_build(compute, driver))
 }
 
+/// The card a CUDA failure happened on, in what a report needs to tell a missing
+/// architecture from an old driver: its name, compute capability, driver and the
+/// engine's CUDA build (`cuda13`, `cuda12`, or `no`). Probed once.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CardFacts {
+    pub name: String,
+    pub compute: String,
+    pub driver: String,
+    pub build: &'static str,
+}
+
+pub fn describe() -> Option<CardFacts> {
+    static CARD: OnceLock<Option<CardFacts>> = OnceLock::new();
+    CARD.get_or_init(|| {
+        let mut command = Command::new("nvidia-smi");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        let output = command.args(chosen_card()).args(["--query-gpu=name,compute_cap,driver_version", "--format=csv,noheader"]).output().ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let line = String::from_utf8_lossy(&output.stdout).lines().next()?.trim().to_string();
+        let mut fields = line.split(',').map(str::trim);
+        Some(CardFacts {
+            name: fields.next()?.to_string(),
+            compute: fields.next()?.to_string(),
+            driver: fields.next()?.to_string(),
+            build: current().map(CudaBuild::folder).unwrap_or("no"),
+        })
+    })
+    .clone()
+}
+
 /// Tensor cores before Ampere accumulate in FP16, where the V projection can
 /// overflow to infinity and poison every later attention; the engine's clamp
 /// keeps it in range and changes nothing on a card that never overflows.

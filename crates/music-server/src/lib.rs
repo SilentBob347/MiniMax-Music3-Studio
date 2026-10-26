@@ -4641,9 +4641,12 @@ async fn restart_engine(state: &AppState) -> Result<(), String> {
             }
             Err(error) => {
                 let run = last_run_log();
+                // why a CUDA backend that loaded has no device: an old driver, mostly
+                let cuda = run.lines().find_map(|line| line.split_once("failed to initialize CUDA: ").map(|(_, why)| format!(" CUDA said: {}.", why.trim())));
                 last_error = match absent_device(&run) {
                     Some((name, available)) => format!(
-                        "The engine has no device {name} on this computer; it sees {available}. Choose Auto in Settings, Local engine, or one of those devices."
+                        "The engine has no device {name} on this computer; it sees {available}.{} Choose Auto in Settings, Local engine, or one of those devices.",
+                        cuda.unwrap_or_default()
                     ),
                     None => format!("the local engine did not start: {error}"),
                 };
@@ -4739,7 +4742,19 @@ fn lost_job_reason(log: &str) -> SongError {
     } else if describes_exhausted_ram(&lowered) {
         SongError::LostRam
     } else if describes_device_failure(&lowered) {
-        SongError::LostDevice(device_error_line(log))
+        // the card, its compute capability, the driver and the build: what tells a missing architecture
+        // from a driver too old for the build
+        let card = if lowered.contains("cuda error") { cuda_build::describe() } else { None };
+        match (device_error_line(log), card) {
+            (Some(detail), Some(card)) => SongError::LostDeviceOnCard {
+                detail,
+                card: card.name,
+                compute: card.compute,
+                driver: card.driver,
+                build: card.build.to_string(),
+            },
+            (detail, _) => SongError::LostDevice(detail),
+        }
     } else if let Some((exit, meaning)) = engine_exit(log) {
         SongError::LostExit { exit, meaning, line: last_engine_line(log) }
     } else {

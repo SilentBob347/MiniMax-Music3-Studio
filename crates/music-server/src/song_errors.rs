@@ -27,6 +27,8 @@ pub enum SongError {
     LostRam,
     /// Lost with an engine that restarted: the card failed, in the engine's own words when it gave any.
     LostDevice(Option<String>),
+    /// Lost with an engine that restarted: a CUDA error, with the card it happened on.
+    LostDeviceOnCard { detail: String, card: String, compute: String, driver: String, build: String },
     /// Lost with an engine that restarted, whose last line says where it was.
     LostAtLine(String),
     Lost,
@@ -59,6 +61,7 @@ impl SongError {
             SongError::LostRam => "lost_ram",
             SongError::LostDevice(Some(_)) => "lost_device",
             SongError::LostDevice(None) => "lost_device_silent",
+            SongError::LostDeviceOnCard { .. } => "lost_device_on_card",
             SongError::LostAtLine(_) => "lost_at_line",
             SongError::Lost => "lost",
             SongError::LostExit { line: Some(_), .. } => "lost_exit_at_line",
@@ -100,6 +103,13 @@ impl SongError {
             | SongError::ImportFailed(detail)
             | SongError::OpenRouterFailed(detail) => put("detail", json!(detail)),
             SongError::LostAtLine(line) | SongError::EngineFatal(line) => put("line", json!(line)),
+            SongError::LostDeviceOnCard { detail, card, compute, driver, build } => {
+                put("detail", json!(detail));
+                put("card", json!(card));
+                put("compute", json!(compute));
+                put("driver", json!(driver));
+                put("build", json!(build));
+            }
             SongError::LostExit { exit, meaning, line } => {
                 put("exit", json!(exit));
                 put("meaning", json!(meaning.unwrap_or("other")));
@@ -131,6 +141,7 @@ impl fmt::Display for SongError {
             SongError::LostRam => f.write_str("The computer ran out of memory (RAM) on this song and the engine restarted, so the song was lost. Close other programs that take memory, or choose a smaller model set in the model manager or a shorter song."),
             SongError::LostDevice(Some(detail)) => write!(f, "The graphics card failed during this song ({detail}) and the engine restarted, so the song was lost. The engine log is in Settings, Engine."),
             SongError::LostDevice(None) => f.write_str("The graphics card failed during this song (a CUDA or driver error) and the engine restarted, so the song was lost. The engine log is in Settings, Engine."),
+            SongError::LostDeviceOnCard { detail, card, compute, driver, build } => write!(f, "The graphics card failed during this song ({detail}) on {card}, compute {compute}, driver {driver}, {build} build and the engine restarted, so the song was lost. The engine log is in Settings, Engine."),
             SongError::LostAtLine(line) => write!(f, "The engine stopped during this song and restarted, so the song was lost; its last line was {line}. The engine log is in Settings, Engine."),
             SongError::Lost => f.write_str("The engine stopped during this song and restarted, so the song was lost. The engine log is in Settings, Engine."),
             SongError::LostExit { exit, meaning, line } => {
@@ -212,6 +223,7 @@ mod tests {
             SongError::LostRam,
             SongError::LostDevice(Some("x".into())),
             SongError::LostDevice(None),
+            SongError::LostDeviceOnCard { detail: "x".into(), card: "x".into(), compute: "6.1".into(), driver: "581.29".into(), build: "cuda12".into() },
             SongError::LostAtLine("x".into()),
             SongError::Lost,
             SongError::LostExit { exit: "0xc000001d".into(), meaning: Some("illegal_instruction"), line: Some("x".into()) },
@@ -235,6 +247,7 @@ mod tests {
                 | SongError::LostVram
                 | SongError::LostRam
                 | SongError::LostDevice(_)
+                | SongError::LostDeviceOnCard { .. }
                 | SongError::LostAtLine(_)
                 | SongError::Lost
                 | SongError::LostExit { .. }
