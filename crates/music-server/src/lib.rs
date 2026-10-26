@@ -622,7 +622,7 @@ impl EngineOptions {
         }
         // Off Windows the engine is a single native build whose ggml loads its
         // own best device - Metal on Apple Silicon, Vulkan in the Linux
-        // package - so Auto asks the engine to choose (no GGML_BACKEND is set)
+        // package - so Auto asks the engine to choose (no --device is passed)
         // and only falls back to the processor if that start fails.
         #[cfg(not(windows))]
         {
@@ -4636,11 +4636,17 @@ async fn restart_engine(state: &AppState) -> Result<(), String> {
                 return Ok(());
             }
             Err(error) => {
-                last_error = format!("the local engine did not start: {error}");
+                let run = last_run_log();
+                last_error = match absent_device(&run) {
+                    Some((name, available)) => format!(
+                        "The engine has no device {name} on this computer; it sees {available}. Choose Auto in Settings, Local engine, or one of those devices."
+                    ),
+                    None => format!("the local engine did not start: {error}"),
+                };
                 // Only Auto moves on, and never past a card that ran out of
                 // memory: Vulkan has no more of it, and the reason is shown.
                 let next = chain.get(index + 1).copied();
-                let log = last_run_log().to_lowercase();
+                let log = run.to_lowercase();
                 let out_of_memory = describes_exhausted_memory(&log) || describes_exhausted_ram(&log);
                 match next {
                     Some(next) if options.backend == music_engine::mm_server::ComputeBackend::Auto && !out_of_memory => {
@@ -4692,6 +4698,16 @@ fn last_run_log() -> String {
     let tail = music_engine::mm_server::startup_log_tail(400);
     let start = tail.iter().rposition(|line| line.contains("---- starting")).unwrap_or(0);
     tail[start..].join("\n")
+}
+
+/// The device the engine was told to use and did not find, with the devices
+/// it lists instead: `--device CUDA0 not found. Available: Vulkan0 CPU`.
+fn absent_device(log: &str) -> Option<(String, String)> {
+    log.lines().rev().find_map(|line| {
+        let (_, rest) = line.split_once("--device ")?;
+        let (name, available) = rest.split_once(" not found. Available:")?;
+        Some((name.trim().to_string(), available.trim().replace(' ', ", ")))
+    })
 }
 
 fn previous_run_log() -> String {
@@ -7821,10 +7837,14 @@ fn engine_failure_reason() -> Option<SongError> {
 }
 
 /// Why the engine gave this job up: running out of memory, else its own last
-/// FATAL line after the job's start.
-fn job_failure_reason(state: &AppState, job_id: &str) -> Option<SongError> {
-    engine_failure_reason().or_else(|| first_fatal(&state.engine_log.lines()?, job_id).map(SongError::EngineFatal))
+/// FATAL line after the job's start. Looked for in the engine's log file, not the
+/// window's 512 lines: a long song's own lines push its start out of those.
+fn job_failure_reason(job_id: &str) -> Option<SongError> {
+    engine_failure_reason().or_else(|| first_fatal(&music_engine::mm_server::startup_log_tail(JOB_LOG_LINES), job_id).map(SongError::EngineFatal))
 }
+
+/// How far back in the engine's log a failed job's own start is looked for.
+const JOB_LOG_LINES: usize = 20_000;
 
 /// The first FATAL line after the job's own start, without the stage tag: the
 /// lines after it are its consequences.
@@ -8385,7 +8405,7 @@ async fn follow_job(state: &AppState, job_id: &str, started: &mut Option<Option<
                 }
                 return;
             }
-            let failure = (remote.status == "failed").then(|| job_failure_reason(&state, &job_id)).flatten();
+            let failure = (remote.status == "failed").then(|| job_failure_reason(&job_id)).flatten();
             if let Some(job) = state.jobs.write().await.get_mut(&job_id) {
                 apply_remote_status(job, &remote.status, failure);
             }
@@ -8551,7 +8571,7 @@ async fn cancel_music_job(
             format!("mm-server cancel is unavailable: {error}"),
         )
     })?;
-    let failure = (remote.status == "failed").then(|| job_failure_reason(&state, &job_id)).flatten();
+    let failure = (remote.status == "failed").then(|| job_failure_reason(&job_id)).flatten();
     let mut jobs = state.jobs.write().await;
     let job = jobs
         .get_mut(&job_id)
@@ -9066,6 +9086,13 @@ mod tests {
         let missing = missing_chosen_card(Some(1), &cards).expect("card 1 is not there");
         assert!(missing.contains("number 1") && missing.contains("0: NVIDIA GeForce RTX 4090"), "{missing}");
         assert!(missing_chosen_card(Some(0), &[]).expect("no card at all").contains("lists no NVIDIA card"));
+    }
+
+    #[test]
+    fn a_device_the_engine_does_not_have_is_named_with_the_ones_it_has() {
+        let log = "---- starting mm-server.exe ----\n--device CUDA0 not found. Available: Vulkan0 Vulkan1 CPU\nUsage: mm-server --models <dir>";
+        assert_eq!(absent_device(log), Some(("CUDA0".to_string(), "Vulkan0, Vulkan1, CPU".to_string())));
+        assert_eq!(absent_device("[Server] Listening on 127.0.0.1:8089"), None);
     }
 
     #[test]
