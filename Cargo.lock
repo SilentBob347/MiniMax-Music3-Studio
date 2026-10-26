@@ -1620,6 +1620,7 @@ name = "music-engine"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "dub-core",
  "libc",
  "music-core",
  "serde",
@@ -1639,6 +1640,7 @@ dependencies = [
  "chrono",
  "dicebear-core",
  "dicebear-styles",
+ "dub-core",
  "dub-sep",
  "dub-tcpp",
  "encoding_rs",

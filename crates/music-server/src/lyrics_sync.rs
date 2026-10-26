@@ -1745,6 +1745,7 @@ impl LyricsSync {
         if let Some(path) = music_core::process::own_libraries_first(binary) {
             command.env("LD_LIBRARY_PATH", path);
         }
+        dub_core::proc::outside_appimage(&mut command);
         command
             .args(wavs)
             .arg("--model")
@@ -1802,6 +1803,7 @@ impl LyricsSync {
             );
         }
         hide_console(&mut command);
+        dub_core::proc::outside_appimage(&mut command);
 
         let mut child = command.spawn().with_context(|| format!("run {}", binary.display()))?;
         let status = loop {
