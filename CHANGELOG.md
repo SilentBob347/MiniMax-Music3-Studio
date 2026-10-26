@@ -8,6 +8,7 @@ Windows build.
 
 ### Fixed
 
+- **Models in a folder with a name outside the system's code page are found**: on Windows the engine read its models folder through the system's ANSI code page, so a path with, say, "é" on a Russian system or Cyrillic on an English one became "?" and the engine started with no models; it now runs with the UTF-8 code page and opens any path.
 - **ADPCM WAV files open**: a WAV in ADPCM (a mastering reference, a training song) failed with "no decoder for this audio"; it is read now.
 - **A CUDA failure names the card it happened on**: a song lost to a CUDA error now says the card, its compute capability, the driver and the engine's CUDA build, which tells a card the build has no code for from a driver too old for it; an engine start whose CUDA device is missing quotes what CUDA answered.
 - **A lost song names how the engine ended**: an engine that crashed during a song was only "stopped"; its exit code is now read before the restart replaces it, noted in the engine log and told in words in the studio's language - an access violation, an instruction this processor does not have, a library that did not load, memory that ran out.
