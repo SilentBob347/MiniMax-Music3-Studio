@@ -473,28 +473,28 @@ fn listen_pack() -> &'static [Asset] {
             model(
                 "moss-audio",
                 "MOSS-Music audio tower (F16)",
-                "https://huggingface.co/scragnog/MOSS-Music-8B-Instruct-GGUF/resolve/main/moss-aud-f16.gguf",
+                "https://huggingface.co/scragnog/MOSS-Music-8B-Instruct-GGUF/resolve/9fe86435bd542bf29cbf4984e9e0ab0ea8ca7e00/moss-aud-f16.gguf",
                 "models/moss/moss-aud-f16.gguf",
                 1_724_480_640,
             ),
             model(
                 "moss-lm",
                 "MOSS-Music 8B (Q8_0)",
-                "https://huggingface.co/scragnog/MOSS-Music-8B-Instruct-GGUF/resolve/main/moss-lm-q8_0.gguf",
+                "https://huggingface.co/scragnog/MOSS-Music-8B-Instruct-GGUF/resolve/9fe86435bd542bf29cbf4984e9e0ab0ea8ca7e00/moss-lm-q8_0.gguf",
                 "models/moss/moss-lm-q8_0.gguf",
                 8_709_513_792,
             ),
             model(
                 "beat-this",
                 "Beat This! (tempo)",
-                "https://github.com/mosynthkey/beat_this_cpp/raw/main/onnx/beat_this.onnx",
+                "https://github.com/mosynthkey/beat_this_cpp/raw/335fc71f67e0b4d472dbf1f68a2aa77822c25a04/onnx/beat_this.onnx",
                 "models/audio-facts/beat_this.onnx",
                 83_077_778,
             ),
             model(
                 "s-key",
                 "S-KEY (key)",
-                "https://huggingface.co/aaatmy/skey-onnx/resolve/main/skey.onnx",
+                "https://huggingface.co/aaatmy/skey-onnx/resolve/c04b6a2bc1d82e50b46d8669560d056f3a2344ab/skey.onnx",
                 "models/audio-facts/skey.onnx",
                 324_536,
             ),
@@ -1749,6 +1749,15 @@ mod tests {
         let lrc = "[ar:Someone]\n[00:01.00]First <00:01.50>line\n\n[Chorus]\n[00:05.20]Second line";
         assert_eq!(plain_lyrics(lrc), "First line\n\n[Chorus]\nSecond line");
         assert_eq!(plain_lyrics("[Verse 1]\nplain"), "[Verse 1]\nplain");
+    }
+
+    /// A model is fetched at a commit, never a branch: a file re-uploaded under the same name would change under
+    /// a studio already set up.
+    #[test]
+    fn every_downloaded_model_names_its_commit() {
+        for asset in pack().iter().chain(listen_pack()) {
+            assert!(!asset.url.contains("/resolve/main/") && !asset.url.contains("/raw/main/"), "{} is fetched from a branch: {}", asset.id, asset.url);
+        }
     }
 }
 
