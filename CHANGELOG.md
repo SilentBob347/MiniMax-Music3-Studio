@@ -31,6 +31,7 @@ Windows build.
 
 ### Changed
 
+- **The spectrum has an Analyzer look**, as ACE-Step Studio has: a continuous curve over every FFT point with Hz and dB scales, 20 Hz to 22 kHz; the Hi-Fi look reaches 22 kHz too.
 - **Models, LoRAs and the hub search can come through HF-Mirror** ([#32](https://github.com/timoncool/MiniMax-Music3-Studio/issues/32)): Settings - Providers - Proxy has a model download source, Hugging Face or HF-Mirror (hf-mirror.com), with the pinned revision kept, as in YuE2 Studio; the download error that pointed there had no such setting in this studio.
 - **The Library shows a song's details beside the list**, as the create page does ([ACE-Step Studio #48](https://github.com/timoncool/ACE-Step-Studio/issues/48)): a click on a row chooses the song without playing it, the cover plays it, and on a narrow window the details open over the page as before. In Russian the Library is called «Медиатека».
 - **Why a song failed is said in the studio's language**: a song refused before it is sent, lost with an engine that restarted, given up by the engine or not taken into the library is told in English, Russian, Chinese, Japanese or Korean, as the window is set; the service keeps the English text for its log, the statistics and agents, with a code and fields beside it.
