@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, Check, Cpu, FolderOpen, Loader2, RotateCw , Terminal } from 'lucide-react';
 import { useI18n } from '../context/I18nContext';
 import { poll } from '../services/poll';
-import { POLLED_HEADERS } from '../services/studioQueries';
+import { SELF_READ } from '../services/studioQueries';
 
 /**
  * Launch options for the local engine.
@@ -147,7 +147,7 @@ export const EngineSettings: React.FC = () => {
   const [logsOpen, setLogsOpen] = useState(false);
   useEffect(() => {
     if (!logsOpen) return;
-    const read = () => fetch('/v1/engine/logs', { headers: POLLED_HEADERS })
+    const read = () => fetch('/v1/engine/logs', { headers: SELF_READ })
       .then(response => (response.ok ? response.json() : Promise.reject(new Error())))
       .then((body: { lines?: string[] }) => setLogs((body.lines ?? []).slice(-200)))
       .catch(() => undefined);

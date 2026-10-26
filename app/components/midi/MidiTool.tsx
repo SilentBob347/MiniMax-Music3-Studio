@@ -3,6 +3,7 @@ import { Download, Loader2, PencilLine, Piano, Play, Square, Trash2 } from 'luci
 import { useI18n } from '../../context/I18nContext';
 import { saveFile } from '../../services/saveFile';
 import { apiUrl } from '../../services/apiBase';
+import { SELF_READ } from '../../services/studioQueries';
 import { MidiEditor } from './MidiEditor';
 import { MidiPlayer, type HeardNote } from './MidiPlayer';
 
@@ -97,12 +98,12 @@ export const MidiTool: React.FC<{ songId: string; songTitle: string; card: strin
     let alive = true;
     let wasRunning = false;
     const read = async () => {
-      const next: MidiStatus = await fetch('/v1/midi').then(response => response.json());
+      const next: MidiStatus = await fetch('/v1/midi', { headers: SELF_READ }).then(response => response.json());
       if (!alive) return;
       setStatus(next);
       const mine = next.run?.song_id === songId ? next.run : null;
       if (mine && !mine.done && mine.stage === 'transcribing') {
-        const body = await fetch('/v1/midi/notes').then(response => response.json());
+        const body = await fetch('/v1/midi/notes', { headers: SELF_READ }).then(response => response.json());
         if (alive) setLiveNotes(body.notes ?? []);
       }
       if (wasRunning && mine?.done) void loadSongMidi();

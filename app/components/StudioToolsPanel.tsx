@@ -14,6 +14,7 @@ import { tempoAndKey } from '../services/songDownload';
 import { DevicePicker } from './DevicePicker';
 import { transcribeWithNativeOpenRouter } from '../services/nativeOpenRouter';
 import { apiUrl } from '../services/apiBase';
+import { SELF_READ } from '../services/studioQueries';
 import { openExternal } from '../services/externalLinks';
 import { StemPlayer } from './StemPlayer';
 
@@ -116,10 +117,10 @@ export function StudioToolsPanel({ initialSongId }: { initialSongId?: string | n
 
   // The separation state, and which stems the chosen track already has.
   const refresh = useCallback(async () => {
-    const separation: SeparationStatus = await fetch('/v1/separation/status').then(response => response.json());
+    const separation: SeparationStatus = await fetch('/v1/separation/status', { headers: SELF_READ }).then(response => response.json());
     setStatus(separation);
     if (songId) {
-      const body = await fetch(`/v1/library/songs/${encodeURIComponent(songId)}/stems`).then(response => response.json());
+      const body = await fetch(`/v1/library/songs/${encodeURIComponent(songId)}/stems`, { headers: SELF_READ }).then(response => response.json());
       setStems(body.stems ?? []);
     }
   }, [songId]);

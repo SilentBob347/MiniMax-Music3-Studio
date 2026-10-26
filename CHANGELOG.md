@@ -40,6 +40,7 @@ Windows build.
 
 ### Changed
 
+- **Notices from Studio Hub as every studio shows them**: popups from the hub now show in the studio, to everyone, and wait until no song, re-render, cover or timing is being made; the sections a notice names are the hub's (create, library, news, tools, settings); strips stand by priority; a link in a popup counts as its click; the hub's news stand among the release notes by date with their picture, all their buttons and the ad label. The window's own reads of the training, LoRAs, stems, MIDI and agent states are no longer counted as features used either.
 - **llama.cpp b11900 for the assistant and ONNX Runtime 1.31.0 for the separator and the measurements**, as in ACE-Step Studio; the Windows CUDA runtimes of llama.cpp are the same files and stay at b11236. **ONNX Runtime starts with its telemetry off**: Microsoft's builds send usage telemetry unless the environment turns it off, and the studio's did not.
 - **The assistant's Gemma models are pinned to a revision**: they were fetched from the repositories' main branch, where a corrected upload of the same name changes the file under the studio; each is now taken at its commit, and one kept before is installed only at the pinned size. The same for karaoke's Whisper models and for Style by ear's MOSS-Music, Beat This! and S-KEY: no model is fetched from a branch any more.
 - **The spectrum has an Analyzer look**, as ACE-Step Studio has: a continuous curve over every FFT point with Hz and dB scales, 20 Hz to 22 kHz; the Hi-Fi look reaches 22 kHz too.
