@@ -1631,6 +1631,7 @@ export const en = {
     assistantManaged: 'Downloaded model',
     assistantManagedHint: 'Studio downloads the model and the llama.cpp runtime and runs them itself. Nothing is fetched until you press Download, and the model only loads when the assistant is actually used.',
     assistantUnload: 'Unload model',
+    assistantVulkanGlibc: 'The assistant runs on the card through Vulkan: the CUDA build of llama.cpp needs glibc {need} or newer, this system has {glibc}',
     installed: 'installed',
     takenFrom: 'taken from {app}',
     takenNotice: 'Taken from other programs on this computer, without downloading:',

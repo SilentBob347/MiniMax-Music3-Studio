@@ -1630,6 +1630,7 @@ export const ru = {
     assistantManaged: 'Скачиваемая модель',
     assistantManagedHint: 'Студия скачивает модель и рантайм llama.cpp и запускает их сама. Ничего не качается, пока вы не нажмёте «Скачать», а модель грузится только когда ассистент реально используется.',
     assistantUnload: 'Выгрузить модель',
+    assistantVulkanGlibc: 'Ассистент идёт на видеокарте через Vulkan: CUDA-сборке llama.cpp нужна glibc {need} или новее, в системе {glibc}',
     installed: 'установлено',
     takenFrom: 'взята из {app}',
     takenNotice: 'Взято у других программ на этом компьютере, без скачивания:',

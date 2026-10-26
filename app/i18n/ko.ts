@@ -1626,6 +1626,7 @@ export const ko = {
     assistantManaged: '내려받은 모델',
     assistantManagedHint: 'Studio 가 모델과 llama.cpp 런타임을 내려받아 직접 실행합니다. 「다운로드」를 누르기 전에는 아무것도 받지 않으며, 모델은 실제로 도우미를 쓸 때만 로드됩니다.',
     assistantUnload: '모델 언로드',
+    assistantVulkanGlibc: '어시스턴트는 Vulkan으로 그래픽 카드에서 실행됩니다: llama.cpp의 CUDA 빌드에는 glibc {need} 이상이 필요하고, 이 시스템은 {glibc}입니다',
     installed: '설치됨',
     takenFrom: '{app}에서 가져옴',
     takenNotice: '이 컴퓨터의 다른 프로그램에서 가져옴(다운로드 없음):',

@@ -1626,6 +1626,7 @@ export const ja = {
     assistantManaged: 'ダウンロード済みモデル',
     assistantManagedHint: 'Studio がモデルと llama.cpp ランタイムをダウンロードし、自身で起動します。「ダウンロード」を押すまで何も取得されず、モデルはアシスタント使用時にのみ読み込まれます。',
     assistantUnload: 'モデルをアンロード',
+    assistantVulkanGlibc: 'アシスタントは Vulkan でグラフィックカードを使います：llama.cpp の CUDA ビルドには glibc {need} 以降が必要で、このシステムは {glibc} です',
     installed: '導入済み',
     takenFrom: '{app} から取得',
     takenNotice: 'このPCの他のプログラムから取得（ダウンロードなし）：',

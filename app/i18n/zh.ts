@@ -1626,6 +1626,7 @@ export const zh = {
     assistantManaged: '下载的模型',
     assistantManagedHint: '工作室会下载模型与 llama.cpp 运行时并自行启动。在你点击“下载”之前不会获取任何内容，模型仅在实际使用助手时加载。',
     assistantUnload: '卸载模型',
+    assistantVulkanGlibc: '助手通过 Vulkan 在显卡上运行：llama.cpp 的 CUDA 版本需要 glibc {need} 或更新，本系统为 {glibc}',
     installed: '已安装',
     takenFrom: '取自 {app}',
     takenNotice: '已从本机其他程序取用，无需下载：',
