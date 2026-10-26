@@ -22,6 +22,16 @@ export const queryClient = new QueryClient({
   },
 });
 
+/** A read the window makes by itself to keep a screen current (statuses, hardware, queues): the hub counts it as
+ * no feature, so a feature count means a person or an agent asked for it. */
+export const POLLED_HEADERS = { 'x-hub-skip': '1' } as const;
+
+export async function readPolled<T>(path: string): Promise<T> {
+  const response = await fetch(path, { headers: POLLED_HEADERS });
+  if (!response.ok) throw new Error(`${path} answered ${response.status}`);
+  return (await response.json()) as T;
+}
+
 export async function readJson<T>(path: string): Promise<T> {
   const response = await fetch(path);
   if (!response.ok) throw new Error(`${path} answered ${response.status}`);
@@ -38,7 +48,7 @@ const karaokeStatusKey = ['karaoke-status'] as const;
 
 /** The karaoke switch and whether its recogniser is ready. */
 export function useKaraokeStatus() {
-  return useQuery({ queryKey: karaokeStatusKey, queryFn: () => readJson<KaraokeStatus>('/v1/karaoke/status'), refetchInterval: 15_000 });
+  return useQuery({ queryKey: karaokeStatusKey, queryFn: () => readPolled<KaraokeStatus>('/v1/karaoke/status'), refetchInterval: 15_000 });
 }
 
 /** The karaoke settings were written, here or by an agent. */
@@ -50,7 +60,7 @@ const setupStatusKey = ['setup-status'] as const;
 
 /** Whether the models are on disk and the engine answers; each screen reads the fields it shows. */
 export function useSetupStatus<T extends object>() {
-  return useQuery({ queryKey: setupStatusKey, queryFn: () => readJson<T>('/setup/status'), refetchInterval: 2_000 });
+  return useQuery({ queryKey: setupStatusKey, queryFn: () => readPolled<T>('/setup/status'), refetchInterval: 2_000 });
 }
 
 export function setupStatusChanged(): void {
@@ -61,7 +71,7 @@ const assistantStatusKey = ['assistant-status'] as const;
 
 /** Whether the writing assistant is set up and answers. */
 export function useAssistantStatus<T extends object>() {
-  return useQuery({ queryKey: assistantStatusKey, queryFn: () => readJson<T>('/v1/assistant/status'), refetchInterval: 5_000 });
+  return useQuery({ queryKey: assistantStatusKey, queryFn: () => readPolled<T>('/v1/assistant/status'), refetchInterval: 5_000 });
 }
 
 export function assistantStatusChanged(): void {
@@ -83,7 +93,7 @@ export function openRouterSettingsChanged(): void {
 export function useSystemResources<T extends { poll_interval_ms?: number }>(enabled = true) {
   return useQuery({
     queryKey: ['system-resources'],
-    queryFn: () => readJson<T>('/v1/system/resources'),
+    queryFn: () => readPolled<T>('/v1/system/resources'),
     refetchInterval: (query) => query.state.data?.poll_interval_ms ?? 1_000,
     enabled,
   });
@@ -102,7 +112,7 @@ export interface ActivityEntry {
 export function useActivity() {
   return useQuery({
     queryKey: ['activity'],
-    queryFn: () => readJson<{ activity?: ActivityEntry[] }>('/v1/activity'),
+    queryFn: () => readPolled<{ activity?: ActivityEntry[] }>('/v1/activity'),
     select: body => body.activity ?? [],
     refetchInterval: 2_000,
   });

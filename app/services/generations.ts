@@ -5,7 +5,7 @@ import { songErrorText } from '../i18n/songErrors';
 import type { Music3Job, Music3Progress, Music3Request, Song } from '../types';
 import { followEngineProgress, stageDetail, type StageClock } from './engineProgress';
 import { mapNativeLibrarySong, setNativeSongNote } from './nativeLibrary';
-import { playlistsChanged, queryClient, readJson, updateLibraryPlaylists, updateLibrarySongs, useLibrarySongs } from './studioQueries';
+import { playlistsChanged, queryClient, readJson, readPolled, updateLibraryPlaylists, updateLibrarySongs, useLibrarySongs } from './studioQueries';
 
 /**
  * The songs being made, as cards in the list. A card follows its engine job
@@ -143,7 +143,7 @@ export function useGenerations({ enabled, notify, onFinished }: GenerationOption
   // on in a hidden window: "without stopping" sends the next song from there.
   const jobs = useQuery({
     queryKey: activeJobsKey,
-    queryFn: () => readJson<Music3Job[]>('/v1/music/jobs'),
+    queryFn: () => readPolled<Music3Job[]>('/v1/music/jobs'),
     enabled,
     refetchInterval: query => (following > 0 || (query.state.data?.length ?? 0) > 0 ? POLL_MS : false),
     refetchIntervalInBackground: true,
