@@ -55,6 +55,7 @@ regex = "1"
 encoding_rs = "0.8"
 tempfile = "3"
 dub-tcpp.workspace = true
+acpp-server.workspace = true
 rusqlite.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true

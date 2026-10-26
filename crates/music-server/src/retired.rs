@@ -44,12 +44,21 @@ mod tests {
             fs::create_dir_all(&path).unwrap();
             fs::write(path.join("encoder-model.int8.onnx"), b"x").unwrap();
         }
-        let kept = root.path().join("karaoke/models/asr-gguf-parakeet-v3/parakeet-tdt-0.6b-v3-Q8_0.gguf");
-        fs::create_dir_all(kept.parent().unwrap()).unwrap();
-        fs::write(&kept, b"x").unwrap();
+        // Whisper-Faster waits for its successor, so it is not among what goes at start
+        let whisper = root.path().join("karaoke/models/whisper/faster-whisper-small/model.bin");
+        assert!(crate::lyrics_sync::RETIRED_WHISPER.iter().any(|retired| whisper.starts_with(root.path().join("karaoke").join(retired))));
+        let kept = [
+            root.path().join("karaoke/models/asr-gguf-parakeet-v3/parakeet-tdt-0.6b-v3-Q8_0.gguf"),
+            root.path().join("karaoke/models/crisperwhisper2-turbo/model.safetensors"),
+            whisper,
+        ];
+        for file in &kept {
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(file, b"x").unwrap();
+        }
         remove_retired(root.path());
         assert!(RETIRED.iter().all(|relative| !root.path().join(relative).exists()));
-        assert!(kept.is_file());
+        assert!(kept.iter().all(|file| file.is_file()));
         remove_retired(root.path());
     }
 }

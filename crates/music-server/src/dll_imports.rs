@@ -473,13 +473,17 @@ mod tests {
                 .unwrap_or_else(|| panic!("{id} is no longer a karaoke runtime"))
         };
         let karaoke = |root: &Path| vec![Downloader::new(root.join("karaoke"))];
-        let whisper = Unit::of_downloader(
-            "faster-whisper",
-            vec![karaoke_asset("whisper-engine"), karaoke_asset("whisper-cublas"), karaoke_asset("whisper-cudnn")],
-            karaoke,
-        );
-        if let Some(folder) = found(&whisper, &mut skipped) {
-            loads.extend(folder_loads(&folder, &[]));
+        // audio.cpp's server for CrisperWhisper, a folder a build; the CUDA 13 build takes the engine's cuBLAS 13
+        for (name, ids, more) in [
+            ("audio.cpp server CUDA 13", vec!["audiocpp-cuda13", "audiocpp-cuda13-cufft"], cublas13.iter().cloned().collect::<Vec<_>>()),
+            ("audio.cpp server CUDA 12", vec!["audiocpp-cuda12", "audiocpp-cuda12-cudart", "audiocpp-cuda12-cublas", "audiocpp-cuda12-cufft"], Vec::new()),
+            ("audio.cpp server Vulkan", vec!["audiocpp-vulkan"], Vec::new()),
+            ("audio.cpp server processor", vec!["audiocpp-cpu"], Vec::new()),
+        ] {
+            let unit = Unit::of_downloader(name, ids.into_iter().map(karaoke_asset).collect(), karaoke);
+            if let Some(folder) = found(&unit, &mut skipped) {
+                loads.extend(folder_loads(&folder, &more));
+            }
         }
         // ONNX Runtime is loaded into the studio's process after its folder joins PATH. Its CUDA build and NVIDIA
         // libraries are left out: only HT-Demucs uses them, and it moves to audio.cpp.
