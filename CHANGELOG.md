@@ -8,6 +8,7 @@ Windows build.
 
 ### Fixed
 
+- **Changing the cover look no longer stalls the window**: switching between Pattern, Photo for the style and AI generation writes the new cover into every track, and the window read the whole library again after each one, with the replay data of every song: 5.2 MB for a library of 37 songs. The library list now leaves the replay data out (a re-render reads it from the song), 0.3 MB for the same library, and a burst of changes is read at most every two seconds (from YuE2 Studio #150).
 - **Models in a folder with a name outside the system's code page are found**: on Windows the engine read its models folder through the system's ANSI code page, so a path with, say, "é" on a Russian system or Cyrillic on an English one became "?" and the engine started with no models; it now runs with the UTF-8 code page and opens any path.
 - **ADPCM WAV files open**: a WAV in ADPCM (a mastering reference, a training song) failed with "no decoder for this audio"; it is read now.
 - **A CUDA failure names the card it happened on**: a song lost to a CUDA error now says the card, its compute capability, the driver and the engine's CUDA build, which tells a card the build has no code for from a driver too old for it; an engine start whose CUDA device is missing quotes what CUDA answered.
