@@ -117,9 +117,10 @@ fn excluded_range(port: u16) -> Option<(u16, u16)> {
         .ok()?;
     // read while it runs, so a listing longer than the pipe holds does not stop it
     let mut stdout = child.stdout.take()?;
+    // the listing comes in the console's code page, not UTF-8, on a Windows in another language
     let reader = thread::spawn(move || {
-        let mut listing = String::new();
-        stdout.read_to_string(&mut listing).map(|_| listing)
+        let mut listing = Vec::new();
+        stdout.read_to_end(&mut listing).map(|_| String::from_utf8_lossy(&listing).into_owned())
     });
     let deadline = Instant::now() + Duration::from_secs(3);
     while child.try_wait().ok()?.is_none() {
