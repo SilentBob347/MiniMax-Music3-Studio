@@ -232,23 +232,6 @@ fn recorded_folder(record: &Path, root: &Path) -> Option<PathBuf> {
     root.join(&parsed.files.first()?.path).parent().map(Path::to_path_buf)
 }
 
-#[cfg(test)]
-/// The SHA-256 of a file, read in pieces.
-fn sha256_of(path: &Path) -> Result<String> {
-    use sha2::Digest;
-    use std::io::Read;
-    let mut file = std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
-    let mut digest = sha2::Sha256::new();
-    let mut buffer = vec![0u8; 1 << 20];
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        digest.update(&buffer[..read]);
-    }
-    Ok(digest.finalize().iter().map(|byte| format!("{byte:02x}")).collect())
-}
 
 #[cfg(test)]
 /// Runtimes that unpack into one folder and only work together there: (name, the assets, where each one's pin record
@@ -313,7 +296,7 @@ fn local_tcpp(build: dub_tcpp::Build, roots: &[PathBuf]) -> Result<Option<PathBu
         ];
         for candidate in candidates {
             let Ok(metadata) = std::fs::metadata(&candidate) else { continue };
-            if metadata.len() == pin.size && sha256_of(&candidate)? == pin.sha256 {
+            if metadata.len() == pin.size && crate::install_record::sha256_of(&candidate)? == pin.sha256 {
                 return Ok(Some(candidate));
             }
         }

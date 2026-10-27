@@ -4647,7 +4647,13 @@ async fn restart_engine(state: &AppState) -> Result<(), String> {
     if options.backend == music_engine::mm_server::ComputeBackend::Cuda && cuda_build::current().is_none() {
         return Err(cuda_build::UNSUPPORTED.into());
     }
-    if let Some(problem) = missing_chosen_card(options.gpu, &cuda_build::nvidia_cards()) {
+    // nvidia-smi is a process of its own: asked off the async workers, and only for a chosen card
+    let chosen_card = options.gpu;
+    let missing = match chosen_card {
+        None => None,
+        Some(_) => tokio::task::spawn_blocking(move || missing_chosen_card(chosen_card, &cuda_build::nvidia_cards())).await.ok().flatten(),
+    };
+    if let Some(problem) = missing {
         // the supervisor asks again every few seconds: the log gets the reason once
         if music_engine::mm_server::startup_log_tail(1).last() != Some(&format!("[studio] {problem}")) {
             music_engine::mm_server::note_in_log(&problem);
@@ -4790,10 +4796,10 @@ fn previous_run(tail: &[String]) -> String {
 /// of the run that ended.
 fn lost_job_reason(log: &str) -> SongError {
     let lowered = log.to_lowercase();
-    if describes_exhausted_memory(&lowered) {
-        SongError::LostVram
-    } else if describes_exhausted_ram(&lowered) {
+    if describes_exhausted_ram(&lowered) {
         SongError::LostRam
+    } else if describes_exhausted_memory(&lowered) {
+        SongError::LostVram
     } else if describes_device_failure(&lowered) {
         // the card, its compute capability, the driver and the build: what tells a missing architecture
         // from a driver too old for the build
@@ -8131,10 +8137,10 @@ async fn free_the_card_for_the_engine(state: &AppState) {
 /// download models that were already on disk.
 fn engine_failure_reason() -> Option<SongError> {
     let tail = music_engine::mm_server::startup_log_tail(80).join("\n").to_lowercase();
-    if describes_exhausted_memory(&tail) {
-        return Some(SongError::LoadVram);
+    if describes_exhausted_ram(&tail) {
+        return Some(SongError::LoadRam);
     }
-    describes_exhausted_ram(&tail).then_some(SongError::LoadRam)
+    describes_exhausted_memory(&tail).then_some(SongError::LoadVram)
 }
 
 /// Why the engine gave this job up: running out of memory, else its own last
@@ -8169,10 +8175,20 @@ fn describes_exhausted_memory(log: &str) -> bool {
 }
 
 /// Whether a lowercased log says the computer's own memory ran out: an
-/// allocation on the host failed, which a smaller set or fewer open programs
-/// cures, not another card.
+/// allocation on the host failed, or memory ran out on an engine whose models
+/// sit on the processor, which a smaller set or fewer open programs cures, not
+/// another card.
 fn describes_exhausted_ram(log: &str) -> bool {
-    log.contains("bad_alloc")
+    log.contains("bad_alloc") || describes_exhausted_memory(log) && ran_on_the_processor(log)
+}
+
+/// Whether the engine of this lowercased log put its models on the processor: its last `[Load] ... backend:` line
+/// names the CPU.
+fn ran_on_the_processor(log: &str) -> bool {
+    log.lines()
+        .rev()
+        .find_map(|line| line.trim_start().strip_prefix("[load] ").and_then(|rest| rest.split_once(" backend: ")).map(|(_, device)| device.to_string()))
+        .is_some_and(|device| device.starts_with("cpu"))
 }
 
 async fn create_music_job(
@@ -8220,7 +8236,12 @@ async fn submit_music_job(state: AppState, mut request: CreateMusicJobRequest, a
         }
         Ok(tokens) => {
             let max_seq = state.engine_options.read().await.max_seq;
-            if let Some(refusal) = prompt_check::kv_cache_shortfall(tokens, prompt_check::song_frames(request.duration_seconds), max_seq) {
+            // audio codes set the song's frames, as a re-render's do
+            let frames = match mm_request.get("audio_codes").and_then(Value::as_str) {
+                Some(codes) => prompt_check::replay_frames(codes),
+                None => prompt_check::song_frames(request.duration_seconds),
+            };
+            if let Some(refusal) = prompt_check::kv_cache_shortfall(tokens, frames, max_seq) {
                 return (StatusCode::BAD_REQUEST, Json(failed_request_job(request, engine_id, refusal)));
             }
         }
@@ -9702,6 +9723,17 @@ mod tests {
         let reason = lost_job_reason(log).to_string();
         assert!(reason.contains("ran out of memory (RAM)") && !reason.contains("graphics card"), "{reason}");
         assert!(!describes_device_failure(&log.to_lowercase()));
+    }
+
+    #[test]
+    fn memory_that_runs_out_on_the_processor_is_the_computer_s() {
+        let on_cpu = "[Load] LM backend: CPU (CPU threads: 16)\n[Load] DiT backend: CPU (shared)\n[AR] Frame 300/1500\nggml_backend_cpu_buffer_type_alloc_buffer: failed to allocate buffer of size 4294967296";
+        let reason = lost_job_reason(on_cpu).to_string();
+        assert!(reason.contains("ran out of memory (RAM)") && !reason.contains("graphics card"), "{reason}");
+        let on_card = "[Load] LM backend: CUDA0 (CPU threads: 16)\n[Load] DiT backend: CUDA0 (shared)\nggml_backend_cuda_buffer_type_alloc_buffer: allocating 2048 MB on device 0: cudaMalloc failed: out of memory";
+        assert!(lost_job_reason(on_card).to_string().contains("graphics card ran out of memory"));
+        let card_after_processor = format!("{on_cpu}\n[studio] ---- starting mm-server ----\n{on_card}");
+        assert!(lost_job_reason(&card_after_processor).to_string().contains("graphics card"), "the last load names the device");
     }
 
     #[test]

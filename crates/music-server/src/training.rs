@@ -538,7 +538,8 @@ const STEPS_FILE: &str = "steps.jsonl";
 
 /// A run as its folder holds it: run.json, with the steps from their own file
 /// once it exists. A line still being written has no newline yet and is left
-/// for the next read.
+/// for the next read, and one a stop cut off mid-write goes with the next step's
+/// append.
 fn read_run(dir: &Path) -> Option<Run> {
     let mut run: Run = read_json(&dir.join("run.json"))?;
     if let Ok(text) = std::fs::read_to_string(dir.join(STEPS_FILE)) {
@@ -547,10 +548,7 @@ fn read_run(dir: &Path) -> Option<Run> {
         for line in complete.lines() {
             match serde_json::from_str(line) {
                 Ok(record) => steps.push(record),
-                Err(error) => {
-                    studio_log!("[ERROR] {}: a step line is not JSON ({error}): {line}", dir.join(STEPS_FILE).display());
-                    return None;
-                }
+                Err(error) => studio_log!("[ERROR] {}: a step line that is not JSON is left out ({error}): {line}", dir.join(STEPS_FILE).display()),
             }
         }
         run.steps = steps;

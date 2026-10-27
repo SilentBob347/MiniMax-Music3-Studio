@@ -5,24 +5,17 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::Json;
 use serde_json::{json, Value};
 
+use crate::studio_log::masked;
 use crate::{api_error, ApiError, AppState};
 
 /// How many of the studio log's latest lines the diagnostics carry.
 const LOG_LINES: usize = 400;
-
-/// Anything that looks like a key masked: OpenRouter, Google, Hugging Face, bearer headers.
-pub fn masked(text: &str) -> String {
-    static KEYS: OnceLock<regex::Regex> = OnceLock::new();
-    let keys = KEYS.get_or_init(|| regex::Regex::new(r"(sk-[A-Za-z0-9_-]{8,}|AIza[0-9A-Za-z_-]{20,}|hf_[A-Za-z0-9]{20,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:[0-9a-f]{20,}|(?i:bearer)\s+[A-Za-z0-9._-]{12,})").expect("key pattern"));
-    keys.replace_all(text, "[key]").into_owned()
-}
 
 /// The studio's log files in `<root>/logs`, the current one last.
 fn log_files(root: &Path) -> Vec<PathBuf> {
