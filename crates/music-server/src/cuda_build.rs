@@ -60,8 +60,21 @@ pub fn chosen_card() -> Vec<String> {
     }
 }
 
-/// Every NVIDIA card: its nvidia-smi index, name and memory in GB.
+/// Every NVIDIA card: its nvidia-smi index, name and memory in GB. nvidia-smi is asked at most every few seconds:
+/// the setup status, polled every second, asks for the cards while one is chosen.
 pub fn nvidia_cards() -> Vec<(u32, String, f64)> {
+    static LAST: std::sync::Mutex<Option<(std::time::Instant, Vec<(u32, String, f64)>)>> = std::sync::Mutex::new(None);
+    const FRESH: std::time::Duration = std::time::Duration::from_secs(5);
+    let mut last = LAST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((_, cards)) = last.as_ref().filter(|(at, _)| at.elapsed() < FRESH) {
+        return cards.clone();
+    }
+    let cards = ask_nvidia_smi_for_cards();
+    *last = Some((std::time::Instant::now(), cards.clone()));
+    cards
+}
+
+fn ask_nvidia_smi_for_cards() -> Vec<(u32, String, f64)> {
     let mut command = dub_core::proc::host_command("nvidia-smi");
     #[cfg(windows)]
     {

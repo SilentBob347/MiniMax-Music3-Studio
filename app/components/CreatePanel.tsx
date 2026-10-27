@@ -102,7 +102,7 @@ function useKeptSetting(key: string, fallback: string | boolean): [string | bool
     return typeof kept === typeof fallback ? (kept as string | boolean) : fallback;
   });
   useEffect(() => {
-    try { window.localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...keptSettings(), [key]: value })); } catch { /* kept until a reload */ }
+    try { window.localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...keptSettings(), [key]: value })); } catch (error) { console.warn('the create settings were not kept across restarts', error); }
   }, [key, value]);
   return [value, setValue];
 }

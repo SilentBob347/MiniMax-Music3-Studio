@@ -4651,7 +4651,9 @@ async fn restart_engine(state: &AppState) -> Result<(), String> {
     let chosen_card = options.gpu;
     let missing = match chosen_card {
         None => None,
-        Some(_) => tokio::task::spawn_blocking(move || missing_chosen_card(chosen_card, &cuda_build::nvidia_cards())).await.ok().flatten(),
+        Some(_) => tokio::task::spawn_blocking(move || missing_chosen_card(chosen_card, &cuda_build::nvidia_cards()))
+            .await
+            .unwrap_or_else(|error| Some(format!("the graphics card chosen in Settings - Local engine was not looked for: {error}"))),
     };
     if let Some(problem) = missing {
         // the supervisor asks again every few seconds: the log gets the reason once
@@ -5477,7 +5479,9 @@ async fn compose_setup_status(state: &AppState, manager_status: model_manager::M
         fields.insert("engine_device".into(), serde_json::to_value(*state.active_device.read().await).unwrap_or(Value::Null));
         let chosen_card = state.engine_options.read().await.gpu;
         let problem = match chosen_card {
-            Some(_) => tokio::task::spawn_blocking(move || missing_chosen_card(chosen_card, &cuda_build::nvidia_cards())).await.ok().flatten(),
+            Some(_) => tokio::task::spawn_blocking(move || missing_chosen_card(chosen_card, &cuda_build::nvidia_cards()))
+            .await
+            .unwrap_or_else(|error| Some(format!("the graphics card chosen in Settings - Local engine was not looked for: {error}"))),
             None => None,
         };
         fields.insert("engine_problem".into(), serde_json::to_value(problem).unwrap_or(Value::Null));
@@ -8137,10 +8141,16 @@ async fn free_the_card_for_the_engine(state: &AppState) {
 /// download models that were already on disk.
 fn engine_failure_reason() -> Option<SongError> {
     let tail = music_engine::mm_server::startup_log_tail(80).join("\n").to_lowercase();
-    if describes_exhausted_ram(&tail) {
+    if !describes_exhausted_memory(&tail) && !describes_exhausted_ram(&tail) {
+        return None;
+    }
+    // the device lines of the run's load may lie further back than the tail, past a long song's frames
+    let run = music_engine::mm_server::startup_log_tail(JOB_LOG_LINES).join("\n").to_lowercase();
+    let run_from_its_start = run.rfind("[studio] ---- starting").map_or(run.as_str(), |start| &run[start..]);
+    if describes_exhausted_ram(&tail) || ran_on_the_processor(run_from_its_start) {
         return Some(SongError::LoadRam);
     }
-    describes_exhausted_memory(&tail).then_some(SongError::LoadVram)
+    Some(SongError::LoadVram)
 }
 
 /// Why the engine gave this job up: running out of memory, else its own last
