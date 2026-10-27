@@ -4,6 +4,15 @@ What changed, newest first. Dates are release dates; the studio is versioned by 
 Windows build.
 
 
+## 2026-10-27 — 3.8.2
+
+YuE2 Studio, ACE-Step Studio and MiniMax Music3 Studio are on one version again: 3.8.2 follows 3.8.0 here.
+
+### Fixed
+
+- **The engine starts when its port is taken or reserved**: the engine listens on port 8086, and when another program held it - or Windows had reserved it for Hyper-V, WSL or Docker - every song was lost with "cannot bind 127.0.0.1:8086". The studio now checks the port before the engine starts and, when it cannot have it, gives the engine a free one; the engine log says which program held 8086 (its name and PID) or which reserved range it lies in, and a song lost to a port taken later says so in the window's language.
+- **An update that cannot replace a file in use leaves the earlier one in place**: when the new file could not take the place of one a running program holds, the earlier file stayed moved aside and the program lost it; it is now put back, and a file moved aside in this run is not swept until the next start.
+
 ## 2026-10-27 — 3.8.0
 
 ### Fixed
