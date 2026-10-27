@@ -210,7 +210,9 @@ fn reveal(path: &Path, select: bool) -> std::io::Result<()> {
     #[cfg(target_os = "macos")]
     {
         let mut open = std::process::Command::new("open");
-        if select { open.arg("-R") };
+        if select {
+            open.arg("-R");
+        }
         open.arg(path).spawn().map(|_| ())
     }
     #[cfg(all(not(windows), not(target_os = "macos")))]
