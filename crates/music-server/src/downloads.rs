@@ -163,6 +163,21 @@ impl Downloader {
         }
     }
 
+    /// What an earlier release left of `asset` for today's pin to replace: `Some(Some(url))` when its record names
+    /// the URL it came from, `Some(None)` when its files lie there without a record of it; `None` when it is today's
+    /// or not there. A model counts by its file, so it has no earlier release.
+    pub fn earlier(&self, asset: &Asset) -> Option<Option<String>> {
+        if asset.kind == AssetKind::Model || self.is_installed(asset) {
+            return None;
+        }
+        if let Some(record) = crate::install_record::read(&self.record_of(asset)) {
+            if record.url != asset.url {
+                return Some(Some(record.url));
+            }
+        }
+        self.present(asset).then_some(None)
+    }
+
     /// Where the record of an asset's download lies: beside its file or archive.
     pub fn record_of(&self, asset: &Asset) -> PathBuf {
         crate::install_record::record_path(&self.path_of(asset))
@@ -223,22 +238,6 @@ impl Downloader {
             .unwrap_or_default();
         files.sort();
         files
-    }
-
-    /// What an earlier pin of this asset put down goes before today's is
-    /// fetched: the files its record lists, then the file or archive the pin
-    /// names. Nothing else in the folder is touched.
-    fn drop_stale(&self, asset: &Asset) -> Result<()> {
-        if self.is_installed(asset) {
-            return Ok(());
-        }
-        crate::install_record::remove_recorded(&self.record_of(asset), &self.root)?;
-        let target = self.path_of(asset);
-        match fs::remove_file(&target) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error).with_context(|| format!("remove {}", target.display())),
-        }
     }
 
     /// The files of the asset are on disk, whichever pin put them there.
@@ -578,6 +577,7 @@ impl Downloader {
     }
 
     async fn fetch_now(&self, asset: &'static Asset, cell: &Arc<Mutex<Option<DownloadProgress>>>) -> Result<()> {
+        let record = self.record_of(asset);
         if !asset.pick.is_empty() {
             // The whole archive over the resumable downloader, then the wanted
             // files extracted locally. Reading named files straight out of a
@@ -587,23 +587,13 @@ impl Downloader {
             // minute timeout. NVIDIA's cuBLAS archive is almost all the two
             // libraries anyway - nineteen megabytes of difference bought a
             // download that survives a bad line.
-            self.drop_stale(asset)?;
-            crate::install_record::begin(&self.record_of(asset))?;
-            let (sha256, files) = download_and_extract_named(&self.http, asset, &self.picked_into(asset), cell, self.cancel.clone()).await?;
+            let (sha256, files) = download_and_extract_named(&self.http, asset, &self.picked_into(asset), cell, self.cancel.clone(), &record, &self.root).await?;
             make_programs_executable(asset.marker, &files)?;
-            return crate::install_record::write(&self.record_of(asset), asset.url, &sha256, &files, &self.root);
+            return crate::install_record::write(&record, asset.url, &sha256, &files, &self.root);
         }
-        self.drop_stale(asset)?;
-        crate::install_record::begin(&self.record_of(asset))?;
         let target = self.path_of(asset);
         fetch(&self.http, asset, &target, cell, self.cancel.clone()).await?;
-        let sha256 = crate::pin_sha::check(asset.url, &target)?;
-        let files = match asset.unzip_into {
-            Some(flavour) => extract_archive(&target, &self.runtime_dir(flavour))?,
-            None => vec![target.clone()],
-        };
-        make_programs_executable(asset.marker, &files)?;
-        crate::install_record::write(&self.record_of(asset), asset.url, &sha256, &files, &self.root)
+        settle_apart(asset, target, record, self.root.clone(), asset.unzip_into.map(|flavour| self.runtime_dir(flavour))).await
     }
 
     pub async fn install(&self, asset: &'static Asset) -> Result<()> {
@@ -624,13 +614,6 @@ impl Downloader {
         }
 
         self.cancel.store(false, std::sync::atomic::Ordering::Relaxed);
-        if let Err(error) = self.drop_stale(asset).and_then(|()| crate::install_record::begin(&self.record_of(asset))) {
-            if let Some(active) = self.progress.lock().await.as_mut() {
-                active.done = true;
-                active.error = Some(format!("{error:#}"));
-            }
-            return Err(error);
-        }
         let target = self.path_of(asset);
         let record = self.record_of(asset);
         let root = self.root.clone();
@@ -648,7 +631,7 @@ impl Downloader {
                     Some(flavour) => runtime_root.join(flavour),
                     None => root.clone(),
                 };
-                let outcome = download_and_extract_named(&http, asset, &destination, &progress, cancel)
+                let outcome = download_and_extract_named(&http, asset, &destination, &progress, cancel, &record, &root)
                     .await
                     .and_then(|(sha256, files)| {
                         make_programs_executable(asset.marker, &files)?;
@@ -661,15 +644,10 @@ impl Downloader {
                 }
                 return;
             }
-            let outcome = fetch(&http, asset, &target, &progress, cancel).await.and_then(|()| {
-                let sha256 = crate::pin_sha::check(asset.url, &target)?;
-                let files = match asset.unzip_into {
-                    Some(flavour) => extract_archive(&target, &runtime_root.join(flavour))?,
-                    None => vec![target.clone()],
-                };
-                make_programs_executable(asset.marker, &files)?;
-                crate::install_record::write(&record, asset.url, &sha256, &files, &root)
-            });
+            let outcome = match fetch(&http, asset, &target, &progress, cancel).await {
+                Ok(()) => settle_apart(asset, target, record, root, asset.unzip_into.map(|flavour| runtime_root.join(flavour))).await,
+                Err(error) => Err(error),
+            };
             let mut guard = progress.lock().await;
             let error = outcome.err().map(|error| error.to_string());
             if let Some(active) = guard.as_mut() {
@@ -691,10 +669,42 @@ async fn fetch(
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
-    if fs::metadata(target).map(|meta| meta.len() > 0).unwrap_or(false) {
+    if holds_todays(asset.kind == AssetKind::Model, asset.url, target).await {
         return Ok(());
     }
+    // an earlier pin's file of this name waits beside it, and comes back when today's does not arrive
+    let earlier = PathBuf::from(format!("{}.earlier", target.display()));
+    let set_aside = target.is_file();
+    if set_aside {
+        fs::rename(target, &earlier).with_context(|| format!("set {} aside", target.display()))?;
+    }
+    let mut outcome = fetch_absent(http, asset, target, progress, cancel).await;
+    if set_aside && outcome.is_ok() {
+        let (url, file) = (asset.url, target.to_path_buf());
+        outcome = tokio::task::spawn_blocking(move || crate::pin_sha::check(url, &file).map(|_| ()))
+            .await
+            .unwrap_or_else(|error| Err(anyhow::anyhow!("the check of {} failed: {error}", target.display())));
+    }
+    if set_aside {
+        if outcome.is_ok() {
+            fs::remove_file(&earlier).ok();
+        } else if !target.exists() {
+            if let Err(error) = fs::rename(&earlier, target) {
+                studio_log!("[ERROR] {} was not put back after the download failed: {error}", target.display());
+            }
+        }
+    }
+    outcome
+}
 
+/// `fetch` once nothing lies at `target`: from another program that has the file, or downloaded into `.part`.
+async fn fetch_absent(
+    http: &reqwest::Client,
+    asset: &Asset,
+    target: &Path,
+    progress: &Arc<Mutex<Option<DownloadProgress>>>,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+) -> Result<()> {
     // How big it is and whether it can be fetched in pieces, asked of the
     // server rather than assumed - both answers come from one ranged byte.
     let url = crate::net::model_url(asset.url);
@@ -795,13 +805,16 @@ pub(crate) fn taken_all() -> std::collections::BTreeMap<String, Taken> {
 
 
 /// Downloads a whole archive with the resumable downloader and extracts the
-/// asset's named files, reporting progress into the shared cell.
+/// asset's named files, reporting progress into the shared cell. What an earlier
+/// pin recorded at `record` goes only once the archive is on disk and checked.
 async fn download_and_extract_named(
     http: &reqwest::Client,
     asset: &'static Asset,
     destination: &Path,
     progress: &Arc<Mutex<Option<DownloadProgress>>>,
     cancel: Arc<std::sync::atomic::AtomicBool>,
+    record: &Path,
+    root: &Path,
 ) -> Result<(String, Vec<PathBuf>)> {
     fs::create_dir_all(destination).with_context(|| format!("create {}", destination.display()))?;
     let archive = destination.join(format!("{}.part-archive", asset.id));
@@ -824,14 +837,59 @@ async fn download_and_extract_named(
     reporter.abort();
     outcome?;
     let (archive_path, wanted, destination, pinned) = (archive.clone(), asset.pick, destination.to_path_buf(), asset.url);
+    let (record, root) = (record.to_path_buf(), root.to_path_buf());
     let extracted = tokio::task::spawn_blocking(move || -> Result<(String, Vec<PathBuf>)> {
         let sha256 = crate::pin_sha::check(pinned, &archive_path)?;
+        replace_earlier(&record, &root, &archive_path)?;
         Ok((sha256, extract_named_local(&archive_path, wanted, &destination)?))
     })
     .await
     .map_err(|error| anyhow::anyhow!("extraction task failed: {error}"))?;
     fs::remove_file(&archive).ok();
     extracted
+}
+
+/// Today's download of an asset is on disk and checked: its install is under way from here
+/// (`install_record::begin`), and what an earlier pin put down goes - the files its record lists but `kept`, the
+/// file the download itself replaced, then that record. Until this point a download cut off leaves the earlier
+/// pin's files where they were.
+pub(crate) fn replace_earlier(record: &Path, root: &Path, kept: &Path) -> Result<()> {
+    crate::install_record::begin(record)?;
+    crate::install_record::remove_earlier(record, root, kept)
+}
+
+/// What follows the download of one file, off the async workers since it hashes the whole file: checked against its
+/// pin, the earlier pin's files gone, unpacked into `unpack_into` when it is an archive, made executable and recorded.
+async fn settle_apart(asset: &'static Asset, target: PathBuf, record: PathBuf, root: PathBuf, unpack_into: Option<PathBuf>) -> Result<()> {
+    tokio::task::spawn_blocking(move || {
+        let sha256 = crate::pin_sha::check(asset.url, &target)?;
+        replace_earlier(&record, &root, &target)?;
+        let files = match unpack_into {
+            Some(folder) => extract_archive(&target, &folder)?,
+            None => vec![target.clone()],
+        };
+        make_programs_executable(asset.marker, &files)?;
+        crate::install_record::write(&record, asset.url, &sha256, &files, &root)
+    })
+    .await
+    .map_err(|error| anyhow::anyhow!("the download's check stopped: {error}"))?
+}
+
+/// Whether the file a download of `url` lands on already holds today's pin: a model by its presence, as models
+/// count; a runtime only by the pinned hash, since an earlier pin's file of the same name stays until today's has
+/// arrived.
+pub(crate) async fn holds_todays(model: bool, url: &str, target: &Path) -> bool {
+    if !fs::metadata(target).is_ok_and(|meta| meta.len() > 0) {
+        return false;
+    }
+    if model {
+        return true;
+    }
+    let Some(pinned) = crate::pin_sha::sha256(url) else {
+        return false;
+    };
+    let target = target.to_path_buf();
+    tokio::task::spawn_blocking(move || crate::install_record::sha256_of(&target).is_ok_and(|got| got == pinned)).await.unwrap_or(false)
 }
 
 fn extract_named_local(archive: &Path, wanted: &[&str], destination: &Path) -> Result<Vec<PathBuf>> {
@@ -1077,7 +1135,15 @@ fn write_entry(entry: &mut impl io::Read, target: &Path, mode: Option<u32>) -> R
     }
     #[cfg(not(unix))]
     let _ = mode;
-    fs::rename(&partial, target).with_context(|| format!("publish {}", target.display()))
+    if let Err(error) = fs::rename(&partial, target) {
+        // a file of the same name a running program holds cannot be replaced, only moved aside
+        if !target.is_file() {
+            return Err(error).with_context(|| format!("publish {}", target.display()));
+        }
+        crate::install_record::set_aside(target).with_context(|| format!("publish {}: {error}", target.display()))?;
+        fs::rename(&partial, target).with_context(|| format!("publish {}", target.display()))?;
+    }
+    Ok(())
 }
 
 /// Gives the file `target` beside `link` the name `link` as well; a copy where
@@ -1124,13 +1190,37 @@ mod tests {
         fs::create_dir_all(file.parent().unwrap()).unwrap();
         fs::write(&file, b"0.1.1-build").unwrap();
         assert!(!downloader.is_installed(&runtime), "a file of another size than the pin's is an earlier build");
-        crate::install_record::write(&downloader.record_of(&runtime), "https://example.invalid/engine-0.1.1.dll", "", &[file.clone()], &root).unwrap();
+        let beside = file.with_file_name("engine-helper.dll");
+        fs::write(&beside, b"helper").unwrap();
+        let record = downloader.record_of(&runtime);
+        crate::install_record::write(&record, "https://example.invalid/engine-0.1.1.dll", "", &[file.clone(), beside.clone()], &root).unwrap();
         assert!(!downloader.is_installed(&runtime), "recorded from the earlier pin");
-        downloader.drop_stale(&runtime).unwrap();
-        assert!(!file.exists() && !downloader.record_of(&runtime).exists());
+        // today's download has replaced the file in place: the rest of the earlier pin and its record go
+        replace_earlier(&record, &root, &file).unwrap();
+        assert!(file.exists() && !beside.exists() && !record.exists());
+        assert!(!downloader.is_installed(&runtime), "until its record is written the install is under way");
         fs::write(&file, b"0.1.3").unwrap();
-        assert!(downloader.is_installed(&runtime), "the pinned size is taken over without a download");
-        assert!(downloader.record_of(&runtime).exists());
+        crate::install_record::write(&record, runtime.url, "", &[file.clone()], &root).unwrap();
+        assert!(downloader.is_installed(&runtime));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// A download that does not arrive leaves an earlier pin's file where it was, and one that arrives takes its
+    /// place; a runtime whose file already holds today's pin by its hash is not fetched again.
+    #[tokio::test]
+    async fn an_earlier_pin_stays_until_todays_download_arrives() {
+        let root = std::env::temp_dir().join(format!("downloads-{}", uuid::Uuid::now_v7()));
+        let downloader = Downloader::new(root.clone());
+        let runtime = Asset { id: "test-runtime", kind: AssetKind::Runtime, url: "http://127.0.0.1:9/engine-0.1.3.dll", relative_path: "models/engine/engine.dll", bytes: 5, ..asset() };
+        let file = downloader.path_of(&runtime);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, b"0.1.1-build").unwrap();
+        let cell = Arc::new(Mutex::new(None));
+        assert!(fetch(&downloader.http, &runtime, &file, &cell, downloader.cancel.clone()).await.is_err(), "nothing answers on port 9");
+        assert_eq!(fs::read(&file).unwrap(), b"0.1.1-build", "the earlier file is back in its place");
+        assert!(!file.with_file_name("engine.dll.earlier").exists());
+        assert!(!holds_todays(false, runtime.url, &file).await, "an unpinned runtime is never taken as today's by its name");
+        assert!(holds_todays(true, runtime.url, &file).await, "a model counts by its file");
         fs::remove_dir_all(&root).ok();
     }
 
@@ -1145,8 +1235,7 @@ mod tests {
         let runtime = Asset { id: "test-runtime", kind: AssetKind::Runtime, url, relative_path: "runtime/onnxruntime.zip", unzip_into: Some("onnx"), marker: "onnxruntime.dll", ..asset() };
         let (key, size) = crate::install_record::key_file(url).unwrap();
         let record = downloader.record_of(&runtime);
-        downloader.drop_stale(&runtime).unwrap();
-        crate::install_record::begin(&record).unwrap();
+        replace_earlier(&record, &root, &downloader.path_of(&runtime)).unwrap();
         fs::create_dir_all(downloader.runtime_dir("onnx")).unwrap();
         let unpacked = downloader.runtime_dir("onnx").join(key);
         fs::File::create(&unpacked).unwrap().set_len(size).unwrap();
@@ -1157,9 +1246,8 @@ mod tests {
         let reopened = Downloader::new(root.clone());
         assert!(!reopened.is_installed(&runtime) && !record.exists());
 
-        // the next install drops the mark with the stale files and ends with the record alone
-        reopened.drop_stale(&runtime).unwrap();
-        crate::install_record::begin(&record).unwrap();
+        // the next install, its download on disk, marks itself again and ends with the record alone
+        replace_earlier(&record, &root, &reopened.path_of(&runtime)).unwrap();
         fs::File::create(&unpacked).unwrap().set_len(size).unwrap();
         crate::install_record::write(&record, url, "abc", &[unpacked], &root).unwrap();
         assert!(reopened.is_installed(&runtime));

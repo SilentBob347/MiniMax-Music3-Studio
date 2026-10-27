@@ -81,15 +81,19 @@ async fn report(state: &AppState) -> Value {
     let karaoke = crate::karaoke_status(State(state.clone())).await.0;
     let midi = crate::midi_status(State(state.clone())).await.0;
     let training = crate::read_training(State(state.clone())).await.0;
-    let card = crate::cuda_build::describe();
     let resources = crate::resources::snapshot();
     let state_for_dll = state.clone();
     let dll = tokio::task::spawn_blocking(move || dll_missing(&state_for_dll)).await.unwrap_or_else(|error| json!([format!("the check failed: {error}")]));
+    // nvidia-smi is a process of its own: it waits off the async workers
+    let (card, cards) = tokio::task::spawn_blocking(|| (crate::cuda_build::describe(), crate::cuda_build::nvidia_cards())).await.unwrap_or_else(|error| {
+        studio_log!("[ERROR] the card query of the diagnostics stopped: {error}");
+        (None, Vec::new())
+    });
     json!({
         "version": crate::studio_version(),
         "os": format!("{} ({})", sysinfo::System::long_os_version().or_else(sysinfo::System::name).unwrap_or_else(|| std::env::consts::OS.to_string()), std::env::consts::ARCH),
         "gpu": card.map(|card| json!({ "name": card.name, "compute": card.compute, "driver": card.driver, "cuda_build": card.build })),
-        "cards": crate::cuda_build::nvidia_cards().into_iter().map(|(index, name, vram_gb)| json!({ "index": index, "name": name, "vram_gb": vram_gb })).collect::<Vec<_>>(),
+        "cards": cards.into_iter().map(|(index, name, vram_gb)| json!({ "index": index, "name": name, "vram_gb": vram_gb })).collect::<Vec<_>>(),
         "memory": { "ram_used_mb": resources.ram_used_mb, "ram_total_mb": resources.ram_total_mb, "vram": resources.gpus.iter().map(|gpu| json!({ "name": gpu.name, "used_mb": gpu.vram_used_mb, "total_mb": gpu.vram_total_mb })).collect::<Vec<_>>() },
         "engine_device": serde_json::to_value(*state.active_device.read().await).unwrap_or(Value::Null),
         "engine_options": serde_json::to_value(state.engine_options.read().await.clone()).unwrap_or(Value::Null),
@@ -219,7 +223,7 @@ fn reveal(path: &Path, select: bool) -> std::io::Result<()> {
     #[cfg(all(not(windows), not(target_os = "macos")))]
     {
         let folder = if select { path.parent().unwrap_or(path) } else { path };
-        dub_core::proc::host_command("xdg-open").arg(folder).spawn().map(|_| ())
+        music_engine::process_group::detach_from_group(&mut dub_core::proc::host_command("xdg-open")).arg(folder).spawn().map(|_| ())
     }
 }
 

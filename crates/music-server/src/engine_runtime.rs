@@ -34,7 +34,6 @@ pub const CUDA12_LIBRARIES: [&str; 2] = ["cublas64_12.dll", "cublasLt64_12.dll"]
 pub const VC_RUNTIME_LIBRARIES: [&str; 5] =
     ["vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "msvcp140_1.dll", "vcomp140.dll"];
 
-#[cfg(test)]
 pub const ASSETS: &[Asset] = &[CUBLAS13, CUBLAS12];
 
 const CUBLAS13: Asset = Asset {

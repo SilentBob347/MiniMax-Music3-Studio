@@ -58,6 +58,16 @@ const KEY_FILES: &[(&str, &str, u64)] = &[
     ("https://api.nuget.org/v3-flatcontainer/microsoft.ai.directml/1.15.4/microsoft.ai.directml.1.15.4.nupkg", "DirectML.dll", 18_527_776),
     ("https://github.com/chenmozhijin/BSRoformer.cpp/releases/download/v0.1.0/BSRoformer-windows-cuda-13.1.0.zip", "bs_roformer-cli.exe", 182_784),
     ("https://github.com/chenmozhijin/BSRoformer.cpp/releases/download/v0.1.0/BSRoformer-windows-x64-msvc.zip", "bs_roformer-cli.exe", 183_808),
+    // Linux and macOS: the regular file a tar's links point to, under its own versioned name
+    ("https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-linux-x64-1.30.0.tgz", "libonnxruntime.so.1.30.0", 28_985_152),
+    ("https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-linux-x64-gpu_cuda12-1.30.0.tgz", "libonnxruntime_providers_cuda.so", 597_264_112),
+    ("https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-osx-arm64-1.30.0.tgz", "libonnxruntime.1.30.0.dylib", 43_879_424),
+    ("https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/linux-x86_64/cuda_cudart-linux-x86_64-12.9.79-archive.tar.xz", "libcudart.so.12.9.79", 741_088),
+    ("https://developer.download.nvidia.com/compute/cuda/redist/libcufft/linux-x86_64/libcufft-linux-x86_64-11.4.1.4-archive.tar.xz", "libcufft.so.11.4.1.4", 289_566_960),
+    ("https://developer.download.nvidia.com/compute/cuda/redist/libcurand/linux-x86_64/libcurand-linux-x86_64-10.3.10.19-archive.tar.xz", "libcurand.so.10.3.10.19", 166_965_432),
+    ("https://developer.download.nvidia.com/compute/cudnn/redist/cudnn/linux-x86_64/cudnn-linux-x86_64-9.25.0.15_cuda12-archive.tar.xz", "libcudnn.so.9.25.0", 129_240),
+    ("https://github.com/chenmozhijin/BSRoformer.cpp/releases/download/v0.1.0/BSRoformer-linux-cuda-13.1.0.tar.xz", "bs_roformer-cli", 304_904),
+    ("https://github.com/chenmozhijin/BSRoformer.cpp/releases/download/v0.1.0/BSRoformer-linux-x64-cpu.tar.xz", "bs_roformer-cli", 295_400),
 ];
 
 /// The record of the archive or file at `path`.
@@ -134,6 +144,40 @@ pub fn write(record: &Path, url: &str, sha256: &str, files: &[PathBuf], root: &P
     remove_if_there(&installing_mark(record))
 }
 
+/// The mark in the name of a file moved aside by `set_aside`.
+const ASIDE: &str = ".stale-";
+
+/// Moves `path` aside under a name of its own beside it, for a file a running program holds, which Windows lets be
+/// renamed but not removed or replaced; `sweep_aside` removes it at a later start.
+pub fn set_aside(path: &Path) -> Result<PathBuf> {
+    let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+    let aside = path.with_file_name(format!("{name}{ASIDE}{}", uuid::Uuid::now_v7().simple()));
+    fs::rename(path, &aside).with_context(|| format!("move {} aside", path.display()))?;
+    studio_log!("{} is held by a running program and was moved aside as {}; it is removed at the next start", path.display(), aside.display());
+    Ok(aside)
+}
+
+/// Removes what `set_aside` left under `root` in an earlier run, passing by the folders of the person's work.
+pub fn sweep_aside(root: &Path) {
+    const WORK: [&str; 11] = ["media", "workspace", "processing", "voices", "skins", "logs", "frontend", "fonts", "recordings", "projects", "reports"];
+    let Ok(entries) = fs::read_dir(root) else { return };
+    for entry in entries.flatten() {
+        let Ok(kind) = entry.file_type() else { continue };
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if kind.is_dir() {
+            if !WORK.contains(&name.as_str()) {
+                sweep_aside(&path);
+            }
+        } else if kind.is_file() && name.contains(ASIDE) {
+            match fs::remove_file(&path) {
+                Ok(()) => studio_log!("removed {}, moved aside by an earlier update", path.display()),
+                Err(error) => studio_log!("[ERROR] {} was not removed: {error}", path.display()),
+            }
+        }
+    }
+}
+
 fn remove_if_there(path: &Path) -> Result<()> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
@@ -142,17 +186,20 @@ fn remove_if_there(path: &Path) -> Result<()> {
     }
 }
 
-/// Deletes the files a record lists under `root`, the record and the mark of
-/// an install cut off: what an earlier pin put down goes before the new one is
-/// fetched.
-pub fn remove_recorded(record: &Path, root: &Path) -> Result<()> {
+/// Deletes the files an earlier pin's record lists under `root` but `kept` (the file today's download replaced in
+/// place), and that record; the mark of today's install stays. A file a running program holds is moved aside.
+pub fn remove_earlier(record: &Path, root: &Path, kept: &Path) -> Result<()> {
     if let Some(parsed) = read(record) {
         for file in &parsed.files {
-            remove_if_there(&root.join(&file.path))?;
+            let path = root.join(&file.path);
+            if path != kept {
+                if let Err(error) = remove_if_there(&path) {
+                    set_aside(&path).with_context(|| format!("{error:#}"))?;
+                }
+            }
         }
     }
-    remove_if_there(record)?;
-    remove_if_there(&installing_mark(record))
+    remove_if_there(record)
 }
 
 /// The SHA-256 of a file, as lower-case hex.
@@ -195,7 +242,7 @@ mod tests {
         assert_eq!(matches(&record, "https://x/v3.zip", &root), Some(false));
         fs::write(&library, b"other").unwrap();
         assert_eq!(matches(&record, "https://x/v2.zip", &root), Some(false));
-        remove_recorded(&record, &root).unwrap();
+        remove_earlier(&record, &root, &root.join("today.dll")).unwrap();
         assert!(!library.exists() && !record.exists());
         let _ = fs::remove_dir_all(&root);
     }
@@ -215,9 +262,11 @@ mod tests {
         write(&record, "https://example.invalid/tool.zip", "abc", &[file], &root).unwrap();
         assert_eq!(matches(&record, "https://example.invalid/tool.zip", &root), Some(true));
         assert!(!installing_mark(&record).exists() && !record.with_extension("json.tmp").exists());
+        // today's download replaced the file in place: the earlier record goes, the mark of today's install stays
         begin(&record).unwrap();
-        remove_recorded(&record, &root).unwrap();
-        assert!(!installing_mark(&record).exists() && !record.exists() && !root.join("tool.dll").exists());
+        remove_earlier(&record, &root, &root.join("tool.dll")).unwrap();
+        assert!(installing_mark(&record).exists() && !record.exists() && root.join("tool.dll").exists());
+        assert_eq!(matches(&record, "https://example.invalid/tool.zip", &root), Some(false));
         fs::remove_dir_all(&root).ok();
     }
 
@@ -268,5 +317,22 @@ mod tests {
                 assert!((file, size) != (other_file, other_size), "{url} and {other} share the key {file} of {size} bytes");
             }
         }
+    }
+
+    #[test]
+    fn a_file_moved_aside_is_gone_at_the_next_start_and_the_work_is_left() {
+        let root = scratch("aside");
+        let runtime = root.join("karaoke").join("runtime");
+        fs::create_dir_all(&runtime).unwrap();
+        fs::create_dir_all(root.join("media")).unwrap();
+        let held = runtime.join("engine.dll");
+        fs::write(&held, b"old").unwrap();
+        let aside = set_aside(&held).unwrap();
+        assert!(!held.exists() && aside.exists() && aside.parent() == held.parent());
+        let song = root.join("media").join(format!("song.flac{ASIDE}x"));
+        fs::write(&song, b"song").unwrap();
+        sweep_aside(&root);
+        assert!(!aside.exists(), "removed at the next start");
+        assert!(song.exists(), "the person's work is not swept");
     }
 }
