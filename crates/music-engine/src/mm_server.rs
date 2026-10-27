@@ -107,7 +107,9 @@ fn port_unavailable(port: u16, error: &std::io::Error) -> String {
 fn excluded_range(port: u16) -> Option<(u16, u16)> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let mut child = Command::new("netsh")
+    // Windows' own netsh by its full path: a bare name is looked for beside the studio first
+    let system = PathBuf::from(std::env::var_os("SystemRoot")?);
+    let mut child = Command::new(system.join("System32").join("netsh.exe"))
         .args(["interface", "ipv4", "show", "excludedportrange", "protocol=tcp"])
         .creation_flags(CREATE_NO_WINDOW)
         .stdin(Stdio::null())

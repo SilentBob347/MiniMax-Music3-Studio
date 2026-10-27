@@ -134,9 +134,9 @@ impl Load {
 /// What a load needs that the loader will not find, followed through every library it does find
 /// (`mm-server.exe` imports `ggml.dll`, `ggml-cuda.dll` imports cuBLAS).
 ///
-/// A Visual C++ library counts as present only when it is one of `VC_RUNTIME_LIBRARIES`: the studio ships those
-/// names beside the engine, so one outside them could be missing on a machine with an older runtime and the check
-/// would never notice.
+/// A Visual C++ library counts as present when it lies in a folder the load searches (the program's own package
+/// carries it) or is one of `VC_RUNTIME_LIBRARIES`, which the studio ships beside the engine; one in neither could be
+/// missing on a machine with an older runtime and comes from System32 only on the build machine.
 pub fn unresolved(load: &Load) -> Result<Vec<String>> {
     let mut seen: Vec<String> = Vec::new();
     let mut missing = Vec::new();
