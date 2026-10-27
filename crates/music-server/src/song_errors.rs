@@ -35,6 +35,9 @@ pub enum SongError {
     /// Lost with an engine that had ended with this exit code: its hex, what a Windows one means (a key the
     /// window translates), and the engine's last line when it left one.
     LostExit { exit: String, meaning: Option<&'static str>, line: Option<String> },
+    /// Lost with an engine that could not listen on its port: `set` when MINIMAX_MM_SERVER_PORT names it, else
+    /// another program took the port the studio chose, which `note` says when it was not the engine's own.
+    LostPort { port: u16, set: bool, note: Option<String> },
     /// The engine gave the song up while loading the models: the card's memory ran out.
     LoadVram,
     /// The engine gave the song up while loading the models: the computer's memory ran out.
@@ -66,6 +69,8 @@ impl SongError {
             SongError::Lost => "lost",
             SongError::LostExit { line: Some(_), .. } => "lost_exit_at_line",
             SongError::LostExit { line: None, .. } => "lost_exit",
+            SongError::LostPort { set: true, .. } => "lost_port_set",
+            SongError::LostPort { set: false, .. } => "lost_port_taken",
             SongError::LoadVram => "load_vram",
             SongError::LoadRam => "load_ram",
             SongError::EngineFatal(_) => "engine_fatal",
@@ -117,6 +122,7 @@ impl SongError {
                     put("line", json!(line));
                 }
             }
+            SongError::LostPort { port, .. } => put("port", json!(port)),
             _ => {}
         }
         params
@@ -153,6 +159,11 @@ impl fmt::Display for SongError {
                     Some(line) => write!(f, "The engine stopped during this song ({how}) and restarted, so the song was lost; its last line was {line}. The engine log is in Settings, Engine."),
                     None => write!(f, "The engine stopped during this song ({how}) and restarted, so the song was lost. The engine log is in Settings, Engine."),
                 }
+            }
+            SongError::LostPort { port, set: true, .. } => write!(f, "The engine could not listen on port {port}, which MINIMAX_MM_SERVER_PORT sets, so the song was lost: another program holds it. Close that program or set another port."),
+            SongError::LostPort { port, set: false, note } => {
+                let chosen = note.as_deref().map(|note| format!(" (At start {note}.)")).unwrap_or_default();
+                write!(f, "The engine could not listen on port {port}, so the song was lost: another program took the port after the studio chose it.{chosen} Restart the studio: it chooses a free port at start.")
             }
             SongError::LoadVram => f.write_str("The graphics card ran out of memory while the engine was loading the models. Choose a smaller quantisation in the model manager, or close whatever else is using the card - the writing assistant holds several gigabytes of its own."),
             SongError::LoadRam => f.write_str("The computer ran out of memory (RAM) while the engine was loading the models. Close other programs that take memory, or choose a smaller quantisation in the model manager."),
@@ -228,6 +239,8 @@ mod tests {
             SongError::Lost,
             SongError::LostExit { exit: "0xc000001d".into(), meaning: Some("illegal_instruction"), line: Some("x".into()) },
             SongError::LostExit { exit: "0x1".into(), meaning: None, line: None },
+            SongError::LostPort { port: 8086, set: true, note: None },
+            SongError::LostPort { port: 8087, set: false, note: Some("x".into()) },
             SongError::LoadVram,
             SongError::LoadRam,
             SongError::EngineFatal("x".into()),
@@ -251,6 +264,7 @@ mod tests {
                 | SongError::LostAtLine(_)
                 | SongError::Lost
                 | SongError::LostExit { .. }
+                | SongError::LostPort { .. }
                 | SongError::LoadVram
                 | SongError::LoadRam
                 | SongError::EngineFatal(_)

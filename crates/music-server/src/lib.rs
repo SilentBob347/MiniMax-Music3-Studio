@@ -4816,6 +4816,12 @@ fn lost_job_reason(log: &str) -> SongError {
             },
             (detail, _) => SongError::LostDevice(detail),
         }
+    } else if lowered.contains("cannot bind") {
+        SongError::LostPort {
+            port: music_engine::mm_server::engine_port(),
+            set: music_engine::mm_server::engine_port_is_set(),
+            note: music_engine::mm_server::engine_port_note().map(str::to_string),
+        }
     } else if let Some((exit, meaning)) = engine_exit(log) {
         SongError::LostExit { exit, meaning, line: last_engine_line(log) }
     } else {
@@ -4958,7 +4964,7 @@ fn engine_location(options: EngineOptions) -> music_engine::mm_server::MmServerL
             }
         }),
         host: env::var("MINIMAX_MM_SERVER_HOST").ok(),
-        port: env::var("MINIMAX_MM_SERVER_PORT").ok().and_then(|value| value.parse().ok()),
+        port: Some(music_engine::mm_server::engine_port()),
         options: options.to_engine(),
     }
 }
@@ -8949,7 +8955,7 @@ async fn local_music_model_catalog(
 impl MmServerClient {
     fn from_environment() -> Self {
         let base_url = env::var("MINIMAX_MUSIC_CPP_BASE_URL")
-            .unwrap_or_else(|_| "http://127.0.0.1:8086".into())
+            .unwrap_or_else(|_| format!("http://127.0.0.1:{}", music_engine::mm_server::engine_port()))
             .trim_end_matches('/')
             .to_owned();
         // the engine's server drops a connection idle for 5 s; a pooled one can be
@@ -9417,6 +9423,8 @@ mod tests {
         assert!(lost_job_reason("ggml_cuda_compute_forward: MUL_MAT failed").to_string().contains("CUDA or driver error"));
         assert!(lost_job_reason("[NAR] Step 2/16, 87844 ms\n[NAR] Step 3/16\n[studio] the engine stopped answering").to_string().contains("its last line was [NAR] Step 3/16."));
         assert!(lost_job_reason("[Server] listening").to_string().contains("stopped during this song"));
+        let taken = lost_job_reason("[Server] FATAL: cannot bind 127.0.0.1:8086").to_string();
+        assert!(taken.contains(&format!("could not listen on port {}", music_engine::mm_server::engine_port())) && taken.contains("another program"), "{taken}");
     }
 
     #[test]
