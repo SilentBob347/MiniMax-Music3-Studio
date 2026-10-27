@@ -91,7 +91,7 @@ pub fn is_provided_by_the_system(name: &str) -> bool {
         // The Vulkan loader, which every Vulkan-capable display driver installs.
         || name == "vulkan-1.dll"
         || [
-            "kernel32.dll", "kernelbase.dll", "ntdll.dll", "user32.dll", "gdi32.dll", "advapi32.dll", "shell32.dll",
+            "kernel32.dll", "kernelbase.dll", "ntdll.dll", "bcryptprimitives.dll", "user32.dll", "gdi32.dll", "advapi32.dll", "shell32.dll",
             "shlwapi.dll", "ole32.dll", "oleaut32.dll", "combase.dll", "ws2_32.dll", "crypt32.dll", "bcrypt.dll",
             "ncrypt.dll", "secur32.dll", "rpcrt4.dll", "setupapi.dll", "cfgmgr32.dll", "version.dll", "dbghelp.dll",
             "powrprof.dll", "psapi.dll", "userenv.dll", "winmm.dll", "msvcrt.dll", "comdlg32.dll", "comctl32.dll",
@@ -148,13 +148,15 @@ pub fn unresolved(load: &Load) -> Result<Vec<String>> {
                 continue;
             }
             seen.push(lowered.clone());
+            let found = load.search.iter().map(|folder| folder.join(&import)).find(|path| path.is_file());
             if is_vc_runtime(&lowered) {
-                if !VC_RUNTIME_LIBRARIES.iter().any(|library| library.eq_ignore_ascii_case(&lowered)) {
+                // the studio's own names, or one the program's package carries in the folders it loads from
+                if found.is_none() && !VC_RUNTIME_LIBRARIES.iter().any(|library| library.eq_ignore_ascii_case(&lowered)) {
                     missing.push(format!("{import} (Visual C++ runtime, not among VC_RUNTIME_LIBRARIES)"));
                 }
                 continue;
             }
-            match load.search.iter().map(|folder| folder.join(&import)).find(|path| path.is_file()) {
+            match found {
                 Some(path) => queue.push_back(path),
                 None => missing.push(import),
             }
