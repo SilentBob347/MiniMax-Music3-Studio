@@ -19,8 +19,10 @@ git -C "$worktree" fetch --quiet origin "$commit" || git -C "$worktree" fetch --
 git -C "$worktree" checkout --quiet "$commit"
 git -C "$worktree" submodule update --init --recursive
 
+# configured from nothing each time (Ubuntu 22.04 CMake has no --fresh)
+rm -rf "$worktree/build-linux"
 cmake -S "$worktree" -B "$worktree/build-linux" -G Ninja -DCMAKE_BUILD_TYPE=Release \
-    -DGGML_NATIVE=OFF -DGGML_VULKAN=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON \
+    -DGGML_NATIVE=OFF -DGGML_VULKAN=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_CUDA_NCCL=OFF \
     -DCMAKE_BUILD_RPATH='$ORIGIN' -DCMAKE_INSTALL_RPATH='$ORIGIN' -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
 # the backends are modules nothing links against, so each is a target of its own
 variants="$(sed -n 's/^build \(ggml-cpu-[a-z0-9_]*\): phony.*/\1/p' "$worktree/build-linux/build.ninja" | sort -u | tr '\n' ' ')"
@@ -35,5 +37,12 @@ cp "$server" "$output/"
 # -a keeps the version symlinks; the binary finds them through $ORIGIN.
 find "$worktree/build-linux" -maxdepth 2 -name 'lib*.so*' -exec cp -a {} "$output/" \;
 printf '{"commit":"%s","backend":"vulkan","platform":"linux"}\n' "$commit" > "$output/runtime.json"
-readelf -d "$output/mm-server" | grep -iE 'runpath|rpath' || true
+for binary in "$output/mm-server" "$output"/lib*.so*; do
+    [ -L "$binary" ] && continue
+    if readelf -d "$binary" | sed -n 's/.*R\(UN\)\{0,1\}PATH.*\[\(.*\)\]/\2/p' | tr ':' '\n' | grep -v '^\$ORIGIN' | grep -q .; then
+        echo "[ERROR] $binary keeps a build-machine library path:" >&2
+        readelf -d "$binary" | grep -iE 'runpath|rpath' >&2
+        exit 1
+    fi
+done
 echo "mm-server ($commit) built into $output"

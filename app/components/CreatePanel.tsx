@@ -1,6 +1,6 @@
 import { NumberField } from './NumberField';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { libraryChanged, setupStatusChanged, useActivity, useAssistantStatus, usePromptCheck, useSetupStatus, type ActivityEntry } from '../services/studioQueries';
+import { libraryChanged, SELF_READ, setupStatusChanged, useActivity, useAssistantStatus, usePromptCheck, useSetupStatus, type ActivityEntry } from '../services/studioQueries';
 import { karaokeReason } from '../services/karaoke';
 import { AlertTriangle, ChevronDown, CircleAlert, Dices, FolderOpen, Loader2, RotateCcw, Save, Sparkles, Square, Tags, Trash2, Wand2, Settings2, X } from 'lucide-react';
 import type { Music3Request, Playlist, Song } from '../types';
@@ -86,7 +86,27 @@ const keptDuration = (): string => {
     return kept >= 10 && kept <= MAX_DURATION_SECONDS ? String(kept) : '';
   } catch { return ''; }
 };
-/** The file format last chosen by hand, kept between sessions like the duration. */
+/** The generation settings, kept across restarts like the words until Reset puts the defaults back. */
+const SETTINGS_KEY = 'studio.createSettings';
+function keptSettings(): Record<string, unknown> {
+  try {
+    const kept: unknown = JSON.parse(window.localStorage.getItem(SETTINGS_KEY) ?? '{}');
+    return kept && typeof kept === 'object' ? (kept as Record<string, unknown>) : {};
+  } catch { return {}; }
+}
+function useKeptSetting(key: string, fallback: string): [string, React.Dispatch<React.SetStateAction<string>>];
+function useKeptSetting(key: string, fallback: boolean): [boolean, React.Dispatch<React.SetStateAction<boolean>>];
+function useKeptSetting(key: string, fallback: string | boolean): [string | boolean, React.Dispatch<React.SetStateAction<string | boolean>>] {
+  const [value, setValue] = useState<string | boolean>(() => {
+    const kept = keptSettings()[key];
+    return typeof kept === typeof fallback ? (kept as string | boolean) : fallback;
+  });
+  useEffect(() => {
+    try { window.localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...keptSettings(), [key]: value })); } catch (error) { console.warn('the create settings were not kept across restarts', error); }
+  }, [key, value]);
+  return [value, setValue];
+}
+
 /** The words of the form (name, style, lyrics), kept across restarts until Reset clears them. */
 const DRAFT_KEY = 'studio.createDraft';
 function keptDraft(): Record<string, string> {
@@ -274,7 +294,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
     try { window.localStorage.setItem(DRAFT_KEY, JSON.stringify({ name, globalMetadata, vocalDetails, arrangement, lyrics })); } catch { /* kept until a reload */ }
   }, [name, globalMetadata, vocalDetails, arrangement, lyrics]);
   const [instrumental, setInstrumental] = useState(false);
-  const [randomizeSeed, setRandomizeSeed] = useState(true);
+  const [randomizeSeed, setRandomizeSeed] = useKeptSetting('randomizeSeed', true);
 
   // Parameters are strings so an empty field can mean "engine default".
   const [duration, setDuration] = useState(keptDuration);
@@ -282,22 +302,22 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
     setDuration(value);
     try { window.localStorage.setItem('studio.createDuration', value); } catch { /* kept until a reload */ }
   };
-  const [lmSeed, setLmSeed] = useState('');
-  const [lmCfg, setLmCfg] = useState('');
-  const [lmTopK, setLmTopK] = useState('');
+  const [lmSeed, setLmSeed] = useKeptSetting('lmSeed', '');
+  const [lmCfg, setLmCfg] = useKeptSetting('lmCfg', '');
+  const [lmTopK, setLmTopK] = useKeptSetting('lmTopK', '');
   const [audioCodes, setAudioCodes] = useState('');
-  const [steps, setSteps] = useState('');
-  const [ditCfg, setDitCfg] = useState('');
-  const [synthBatch, setSynthBatch] = useState('');
+  const [steps, setSteps] = useKeptSetting('steps', '');
+  const [ditCfg, setDitCfg] = useKeptSetting('ditCfg', '');
+  const [synthBatch, setSynthBatch] = useKeptSetting('synthBatch', '');
   // A track read back into the codes the engine renders from. Nothing here
   // changes a request until a file is chosen: no file, no field, and the
   // studio behaves exactly as it did before this existed.
-  const [seed, setSeed] = useState('');
+  const [seed, setSeed] = useKeptSetting('seed', '');
   // Quality first, not "quick listen": the engine's own defaults are mp3 at
   // 128 kbps, which throws away what the vocoder produced.
-  const [mp3Bitrate, setMp3Bitrate] = useState('320');
-  const [fadeIn, setFadeIn] = useState('');
-  const [fadeOut, setFadeOut] = useState('');
+  const [mp3Bitrate, setMp3Bitrate] = useKeptSetting('mp3Bitrate', '320');
+  const [fadeIn, setFadeIn] = useKeptSetting('fadeIn', '');
+  const [fadeOut, setFadeOut] = useKeptSetting('fadeOut', '');
   // The engine's own default is 128 kbps, which throws away what the vocoder
   // produced; 320 is the top the encoder offers and costs a few megabytes.
   const [format, setFormat] = useState<Music3Request['output_format']>(keptFormat);
@@ -358,6 +378,14 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
   const [mode, setMode] = useState<'simple' | 'studio'>('studio');
   const [assistInstruction, setAssistInstruction] = useState('');
   const [error, setError] = useState<string | null>(null);
+  // the form scrolls above the Create button: a refusal at its foot is brought into view, or a click seems to do nothing
+  const errorBox = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!error) return undefined;
+    // after the frame the assistant's card leaves: a scroll started before it shrinks the form stops short
+    const frame = window.requestAnimationFrame(() => errorBox.current?.scrollIntoView({ block: 'nearest' }));
+    return () => window.cancelAnimationFrame(frame);
+  }, [error]);
   const promptFile = useRef<HTMLInputElement | null>(null);
 
   const ready = setup?.ready === true && setup?.engine_ready === true;
@@ -384,7 +412,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
 
 
   useEffect(() => {
-    void fetch('/v1/local-models/music')
+    void fetch('/v1/local-models/music', { headers: SELF_READ })
       .then(response => (response.ok ? response.json() : Promise.reject(new Error())))
       .then((body: { catalog?: EngineCatalog }) => setCatalog(body.catalog ?? null))
       .catch(() => setCatalog(null));
@@ -1175,7 +1203,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
             <button type="button" onClick={setupStatusChanged} className="hover:text-pink-500">{t('refresh')}</button>
           </div>
           {setup?.hardware?.reason && <p className="px-1 text-[10px] text-zinc-400">{setup.hardware.reason}</p>}
-          {error && <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs leading-5 text-red-700 dark:text-red-200">{error}</div>}
+          {error && <div ref={errorBox} role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs leading-5 text-red-700 dark:text-red-200">{error}</div>}
         </div>
       </div>
 

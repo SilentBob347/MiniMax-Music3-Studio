@@ -4,7 +4,7 @@ import { BarChart3, Boxes, Cloud, Cpu, Image as ImageIcon, Info, Monitor, Plug, 
 import { SiGithub } from '@icons-pack/react-simple-icons';
 import { useAuth } from '../context/AuthContext';
 import { useI18n } from '../context/I18nContext';
-import type { Language } from '../i18n/translations';
+import { LANGUAGE_NAMES, type Language } from '../i18n/translations';
 import { ProviderSettings } from './ProviderSettings';
 import { EngineSettings } from './EngineSettings';
 import { SetupGate } from './SetupGate';
@@ -13,6 +13,7 @@ import { AgentPanel } from './AgentPanel';
 import { FileTagSettings } from './FileTagSettings';
 import { HubSettings } from './HubSettings';
 import { issueReportUrl, type ReportFacts } from '../services/issueReport';
+import { STUDIO_REPO_URL } from '../studio';
 import { useSetupStatus } from '../services/studioQueries';
 import { onSidebarExtras, setSidebarExtras, sidebarExtras, type SidebarExtras } from '../services/playerPanels';
 
@@ -186,11 +187,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, initialSec
                     </div>
                   </div>
                   <select value={language} onChange={(event) => setLanguage(event.target.value as Language)} className={INPUT}>
-                    <option value="ru">{t('russianLanguage')}</option>
-                    <option value="en">{t('english')}</option>
-                    <option value="zh">{t('chinese')}</option>
-                    <option value="ja">{t('japaneseLanguage')}</option>
-                    <option value="ko">{t('koreanLanguage')}</option>
+                    {(Object.entries(LANGUAGE_NAMES) as [Language, string][]).map(([code, name]) => (
+                      <option key={code} value={code} lang={code}>{name}</option>
+                    ))}
                   </select>
                 </div>
 
@@ -261,10 +260,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, initialSec
                 <div className="space-y-2 border-t border-zinc-200 pt-4 dark:border-zinc-700/50">
                   <p className="font-medium text-zinc-900 dark:text-white">{t('thisStudio')}</p>
                   <div className="flex flex-wrap gap-2">
-                    <a href="https://github.com/timoncool/MiniMax-Music3-Studio" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 rounded-lg bg-zinc-800 px-3 py-1.5 text-xs font-medium text-white dark:bg-zinc-700">
+                    <a href={STUDIO_REPO_URL} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 rounded-lg bg-zinc-800 px-3 py-1.5 text-xs font-medium text-white dark:bg-zinc-700">
                       <SiGithub size={14} />MiniMax Music3 Studio
                     </a>
-                    <a href={issueReportUrl('https://github.com/timoncool/MiniMax-Music3-Studio', __APP_VERSION__, reportFacts)} target="_blank" rel="noopener noreferrer" className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-600 dark:text-zinc-200">{t('reportIssues')}</a>
+                    <a href={issueReportUrl(STUDIO_REPO_URL, __APP_VERSION__, reportFacts)} target="_blank" rel="noopener noreferrer" className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-600 dark:text-zinc-200">{t('reportIssues')}</a>
                   </div>
                 </div>
               </div>

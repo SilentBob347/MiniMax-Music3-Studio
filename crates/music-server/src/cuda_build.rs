@@ -6,7 +6,7 @@
 //! driver predates CUDA 13. Both hold device code for each architecture, so no
 //! driver ever compiles PTX.
 
-use std::{process::Command, sync::OnceLock};
+use std::sync::OnceLock;
 
 use serde::Serialize;
 
@@ -60,9 +60,22 @@ pub fn chosen_card() -> Vec<String> {
     }
 }
 
-/// Every NVIDIA card: its nvidia-smi index, name and memory in GB.
+/// Every NVIDIA card: its nvidia-smi index, name and memory in GB. nvidia-smi is asked at most every few seconds:
+/// the setup status, polled every second, asks for the cards while one is chosen.
 pub fn nvidia_cards() -> Vec<(u32, String, f64)> {
-    let mut command = Command::new("nvidia-smi");
+    static LAST: std::sync::Mutex<Option<(std::time::Instant, Vec<(u32, String, f64)>)>> = std::sync::Mutex::new(None);
+    const FRESH: std::time::Duration = std::time::Duration::from_secs(5);
+    let mut last = LAST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((_, cards)) = last.as_ref().filter(|(at, _)| at.elapsed() < FRESH) {
+        return cards.clone();
+    }
+    let cards = ask_nvidia_smi_for_cards();
+    *last = Some((std::time::Instant::now(), cards.clone()));
+    cards
+}
+
+fn ask_nvidia_smi_for_cards() -> Vec<(u32, String, f64)> {
+    let mut command = dub_core::proc::host_command("nvidia-smi");
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -90,7 +103,7 @@ pub fn nvidia_cards() -> Vec<(u32, String, f64)> {
 fn device() -> Option<((u32, u32), u32)> {
     static DEVICE: OnceLock<Option<((u32, u32), u32)>> = OnceLock::new();
     *DEVICE.get_or_init(|| {
-        let mut command = Command::new("nvidia-smi");
+        let mut command = dub_core::proc::host_command("nvidia-smi");
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -121,7 +134,7 @@ fn parse_query(line: &str) -> Option<((u32, u32), u32)> {
 pub fn nvidia_card() -> bool {
     static PRESENT: OnceLock<bool> = OnceLock::new();
     *PRESENT.get_or_init(|| {
-        let mut command = Command::new("nvidia-smi");
+        let mut command = dub_core::proc::host_command("nvidia-smi");
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -136,6 +149,43 @@ pub fn nvidia_card() -> bool {
 /// supports.
 pub fn current() -> Option<CudaBuild> {
     device().and_then(|(compute, driver)| cuda_build(compute, driver))
+}
+
+/// The card a CUDA failure happened on, in what a report needs to tell a missing
+/// architecture from an old driver: its name, compute capability, driver and the
+/// engine's CUDA build (`cuda13`, `cuda12`, or `no`). Probed once.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CardFacts {
+    pub name: String,
+    pub compute: String,
+    pub driver: String,
+    pub build: &'static str,
+}
+
+pub fn describe() -> Option<CardFacts> {
+    static CARD: OnceLock<Option<CardFacts>> = OnceLock::new();
+    CARD.get_or_init(|| {
+        let mut command = dub_core::proc::host_command("nvidia-smi");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        let output = command.args(chosen_card()).args(["--query-gpu=name,compute_cap,driver_version", "--format=csv,noheader"]).output().ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let line = String::from_utf8_lossy(&output.stdout).lines().next()?.trim().to_string();
+        let mut fields = line.split(',').map(str::trim);
+        Some(CardFacts {
+            name: fields.next()?.to_string(),
+            compute: fields.next()?.to_string(),
+            driver: fields.next()?.to_string(),
+            build: current().map(CudaBuild::folder).unwrap_or("no"),
+        })
+    })
+    .clone()
 }
 
 /// Tensor cores before Ampere accumulate in FP16, where the V projection can

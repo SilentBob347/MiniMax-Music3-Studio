@@ -68,7 +68,7 @@ Code, save [docs/mcp-skill.md](docs/mcp-skill.md) as `~/.claude/skills/minimax-m
   so a track can be re-rendered deterministically, or re-rendered with different steps,
   seed or output format.
 - **Word-level karaoke** — enhanced LRC with a timestamp on every word, aligned by
-  Parakeet, Whisper or a cloud model. Your lyrics are kept; only the timing is borrowed.
+  Parakeet, CrisperWhisper 2.0 turbo (in audio.cpp) or a cloud model. Your lyrics are kept; only the timing is borrowed.
 - **Karaoke video** written with the bundled ffmpeg, hardware-encoded when the machine can
   and software-encoded when it cannot.
 - **A writing assistant** for captions and lyrics, from a local GGUF model or OpenRouter,
@@ -111,7 +111,7 @@ Code, save [docs/mcp-skill.md](docs/mcp-skill.md) as `~/.claude/skills/minimax-m
     the folders.
   - **Preparation on its own** — lyrics come from the lyric databases players use (LRCLIB,
     QQ Music, Kugou), word for word; only a song none of them knows has its vocals
-    separated and is heard by Whisper, with its usual hallucinations filtered out. The
+    separated and is heard by CrisperWhisper, with Whisper's usual hallucinations filtered out. The
     assistant lays the lyrics out in sections. MOSS-Music listens to every song and writes
     its structured caption, with the tempo and key measured on the card by Beat This! and
     S-KEY.
@@ -235,7 +235,7 @@ the fixes back as a pull request.** The studio keeps its data in `~/.local/share
 | Tempo and key · Beat This!, S-KEY | CUDA | DirectML | processor |
 | Stems · HT-Demucs | CUDA | processor | processor |
 | Karaoke timing · Parakeet | CUDA | Vulkan | processor |
-| Karaoke timing · Whisper | CUDA | processor | processor |
+| Karaoke timing · CrisperWhisper | CUDA | Vulkan | processor |
 | Writing assistant · llama.cpp | CUDA | Vulkan | processor |
 | Audio to MIDI · MuScriptor | CUDA | processor | processor |
 
@@ -397,10 +397,10 @@ the exact name in the listed folder is recognised and not downloaded again.
 
 | Files | What for | Size | Put in the data folder |
 | --- | --- | --- | --- |
-| [faster-whisper-large-v3](https://huggingface.co/Systran/faster-whisper-large-v3/tree/main): `config.json`, `model.bin`, `preprocessor_config.json`, `tokenizer.json`, `vocabulary.json` | Whisper large-v3 | 2.9 GB | `karaoke\models\whisper\faster-whisper-large-v3\` |
+| [CrisperWhisper2.0_turbo](https://huggingface.co/nyralabs/CrisperWhisper2.0_turbo/tree/de0369c8a68025b7f6e86387b6eb5a3b369787c8): every file of the repository | CrisperWhisper 2.0 turbo, in audio.cpp's server | 1.6 GB | `karaoke\models\crisperwhisper2-turbo\` |
 | [`parakeet-tdt-0.6b-v3-Q8_0.gguf`](https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/d8d8c32cb2017c57e5307767343e97870f8a7f53/parakeet-tdt-0.6b-v3-Q8_0.gguf) | Parakeet TDT v3, European languages | 0.7 GB | `karaoke\models\asr-gguf-parakeet-v3\` |
 | [`parakeet-ultra-Q8_0.gguf`](https://huggingface.co/handy-computer/parakeet-ultra-gguf/resolve/a1539be1b849ea7463b88343e5277b373d0c4ea9/parakeet-ultra-Q8_0.gguf) | Parakeet Ultra, fewer wrong words in Russian and in noise | 0.7 GB | `karaoke\models\asr-gguf-parakeet-ultra\` |
-| [`transcribe_engine.dll`](https://github.com/timoncool/transcribe.cpp/releases/download/engine-0.1.1/transcribe_engine.dll) (CUDA), [`transcribe_engine-vulkan.dll`](https://github.com/timoncool/transcribe.cpp/releases/download/engine-0.1.1/transcribe_engine-vulkan.dll), [`transcribe_engine-cpu.dll`](https://github.com/timoncool/transcribe.cpp/releases/download/engine-0.1.1/transcribe_engine-cpu.dll) | transcribe.cpp, the engine Parakeet runs on: one build, the one for your card | 3.7-145 MB | `karaoke\models\transcribe-engine\`, `transcribe-engine-vulkan\`, `transcribe-engine-cpu\`, each as `transcribe_engine.dll` |
+| [`transcribe_engine.dll`](https://github.com/timoncool/transcribe.cpp/releases/download/engine-0.1.3/transcribe_engine.dll) (CUDA), [`transcribe_engine-vulkan.dll`](https://github.com/timoncool/transcribe.cpp/releases/download/engine-0.1.3/transcribe_engine-vulkan.dll), [`transcribe_engine-cpu.dll`](https://github.com/timoncool/transcribe.cpp/releases/download/engine-0.1.3/transcribe_engine-cpu.dll) | transcribe.cpp, the engine Parakeet runs on: one build, the one for your card | 3.7-145 MB | `karaoke\models\transcribe-engine\`, `transcribe-engine-vulkan\`, `transcribe-engine-cpu\`, each as `transcribe_engine.dll` |
 
 **Stems and vocals for recognition**
 
@@ -440,20 +440,21 @@ mm-server.exe
   ├─ ggml.dll → ggml-base.dll, ggml-cpu.dll, ggml-cuda.dll     shipped inside the app
   │                               └─ cublas64_13.dll, cublasLt64_13.dll   downloaded once
   │                               └─ nvcuda.dll                           your NVIDIA driver
-  └─ vcruntime140.dll, msvcp140.dll, vcomp140.dll              Visual C++ runtime
+  └─ vcruntime140.dll, vcruntime140_1.dll, msvcp140.dll,       Visual C++ runtime,
+     msvcp140_1.dll, vcomp140.dll                               shipped inside the app
 ```
 
 **Shipped inside the app.** `mm-server.exe`, the four `ggml*.dll` files and
 `neural-codec.exe` are part of every release, in `resources\minimaxmusic-cpp\` beside the
 main executable. They are built from the pinned `minimaxmusic.cpp` commit and never
-downloaded.
+downloaded. The Visual C++ runtime the engine and ONNX Runtime import lies there too,
+app-local as Microsoft's redistribution terms allow, so nothing is installed into Windows.
 
 **Downloaded once, on the first engine start.**
 
 | File(s) | Where from | Size | Why |
 | --- | --- | --- | --- |
 | `cublas64_13.dll`, `cublasLt64_13.dll` | NVIDIA's redistributable [`libcublas-windows-x86_64-13.5.1.27-archive.zip`](https://developer.download.nvidia.com/compute/cuda/redist/libcublas/windows-x86_64/libcublas-windows-x86_64-13.5.1.27-archive.zip) | 391 MB (zip) | The CUDA linear-algebra library `ggml-cuda.dll` is linked against. Too large, and under NVIDIA's own licence, to bundle — so it comes straight from NVIDIA. This is the **NVIDIA cuBLAS 13.5** item in the model panel. |
-| Visual C++ 2015–2022 runtime | Microsoft's permanent link [`vc_redist.x64.exe`](https://aka.ms/vs/17/release/vc_redist.x64.exe) | small installer | The C++ runtime the engine is compiled against. Run **only** when the DLLs are missing — most Windows machines already have it. |
 
 **Never downloaded.** `nvcuda.dll` is part of your NVIDIA driver; if the engine complains
 about it, update the driver. A machine that already has the CUDA Toolkit installed has
@@ -468,8 +469,7 @@ You can place the CUDA libraries by hand:
    `cublasLt64_13.dll`.
 3. Drop both **next to `mm-server.exe`** — the `resources\minimaxmusic-cpp\` folder beside
    the app's main `.exe`.
-4. If the engine still won't start, install the Visual C++ runtime from the Microsoft link,
-   and make sure your NVIDIA driver is current.
+4. If the engine still won't start, make sure your NVIDIA driver is current.
 
 On startup the engine reads its own import table and fetches only what is genuinely
 missing, so a hand-placed DLL is simply found and used.

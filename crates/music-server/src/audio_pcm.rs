@@ -174,6 +174,53 @@ fn decode_channels(path: &Path) -> Result<(Vec<Vec<f32>>, u32)> {
     decode_source(Box::new(file), extension).with_context(|| format!("decode {}", path.display()))
 }
 
+/// Every file extension the decoder reads: what the window, the uploads, the
+/// imports and the agent's tools take as audio. Opus is not read.
+pub const AUDIO_EXTENSIONS: [&str; 15] = ["mp3", "mp2", "mp1", "wav", "flac", "ogg", "oga", "m4a", "mp4", "aac", "aiff", "aif", "aifc", "caf", "mka"];
+
+/// Whether `extension` (without its dot, any case) names audio the decoder reads.
+pub fn reads_audio(extension: &str) -> bool {
+    AUDIO_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
+}
+
+/// Whether the window's player plays this file as it is: MP3, FLAC, Ogg, AAC
+/// (an MP4 or M4A only when its audio is AAC, not ALAC) and a WAV of plain or
+/// float samples. Anything else the library keeps as FLAC.
+pub fn plays_in_window(extension: &str, audio: &[u8]) -> bool {
+    match extension.to_ascii_lowercase().as_str() {
+        "mp3" | "flac" | "ogg" | "oga" | "aac" => true,
+        "m4a" | "mp4" => {
+            let Ok(format) = probe(Box::new(std::io::Cursor::new(audio.to_vec())), Some(extension)) else {
+                return false;
+            };
+            format.default_track(TrackType::Audio).and_then(|track| track.codec_params.as_ref()).is_some_and(|params| {
+                matches!(params, CodecParameters::Audio(audio) if audio.codec == symphonia::core::codecs::audio::well_known::CODEC_ID_AAC)
+            })
+        }
+        // the fmt chunk's format tag: 1 PCM, 3 float, 0xFFFE extensible
+        "wav" => wav_format_tag(audio).is_some_and(|tag| matches!(tag, 1 | 3 | 0xFFFE)),
+        _ => false,
+    }
+}
+
+/// The format tag of a WAV's `fmt ` chunk, wherever it stands among the chunks (a JUNK, bext or LIST chunk may come
+/// first).
+fn wav_format_tag(audio: &[u8]) -> Option<u16> {
+    if audio.get(0..4)? != b"RIFF" || audio.get(8..12)? != b"WAVE" {
+        return None;
+    }
+    let mut at = 12usize;
+    while let Some(header) = audio.get(at..at + 8) {
+        let size = u32::from_le_bytes([header[4], header[5], header[6], header[7]]) as usize;
+        if &header[0..4] == b"fmt " {
+            let tag = audio.get(at + 8..at + 10)?;
+            return Some(u16::from_le_bytes([tag[0], tag[1]]));
+        }
+        at = at.checked_add(8 + size + (size & 1))?;
+    }
+    None
+}
+
 /// Decodes audio held in memory - a track as the engine sent it - to stereo
 /// at its own rate; a mono source is doubled.
 pub fn decode_stereo_bytes(bytes: Vec<u8>, extension: &str) -> Result<audio_post::Stereo> {
@@ -371,6 +418,21 @@ mod tests {
     }
 
     #[test]
+    fn mp2_adpcm_matroska_and_caf_decode() {
+        let files: [(&[u8], &str); 4] = [
+            (include_bytes!("testdata/tone.mp2"), "mp2"),
+            (include_bytes!("testdata/tone-adpcm.wav"), "wav"),
+            (include_bytes!("testdata/tone.mka"), "mka"),
+            (include_bytes!("testdata/tone.caf"), "caf"),
+        ];
+        for (bytes, extension) in files {
+            let decoded = decode_stereo_bytes(bytes.to_vec(), extension).unwrap_or_else(|error| panic!("{extension}: {error:#}"));
+            let seconds = decoded.left.len() as f64 / f64::from(decoded.rate);
+            assert!((0.15..0.3).contains(&seconds), "{extension}: {seconds} s");
+        }
+    }
+
+    #[test]
     fn resampling_keeps_the_band_and_drops_what_lies_above_it() {
         let tone = |hz: f32| -> Vec<f32> { (0..44_100).map(|index| (2.0 * std::f32::consts::PI * hz * index as f32 / 44_100.0).sin() * 0.5).collect() };
         let rms = |samples: &[f32]| (samples.iter().map(|sample| sample * sample).sum::<f32>() / samples.len() as f32).sqrt();
@@ -380,6 +442,34 @@ mod tests {
         // 12 kHz is above 16 kHz's Nyquist: it must not fold back to 4 kHz
         let folded = resample(&tone(12_000.0), 44_100, 16_000).unwrap();
         assert!(rms(&folded[1000..15000]) < 0.01, "a tone above the band is filtered out: {}", rms(&folded));
+    }
+
+    #[test]
+    fn the_window_offers_every_extension_the_decoder_reads() {
+        let window = include_str!("../../../app/services/audioFiles.ts");
+        let listed = window.split_once("AUDIO_EXTENSIONS = [").and_then(|(_, rest)| rest.split_once(']')).map(|(list, _)| list).unwrap();
+        let listed: Vec<&str> = listed.split(',').map(|item| item.trim().trim_matches('\'')).filter(|item| !item.is_empty()).collect();
+        assert_eq!(listed, AUDIO_EXTENSIONS);
+        assert!(reads_audio("MKA") && reads_audio("caf") && !reads_audio("opus") && !reads_audio("txt"));
+    }
+
+    #[test]
+    fn only_what_the_player_plays_is_kept_as_it_is() {
+        let chunk = |id: &[u8; 4], body: &[u8]| [id.as_slice(), &(body.len() as u32).to_le_bytes(), body, &vec![0u8; body.len() & 1]].concat();
+        let wav_with = |before: &[u8], tag: u16| {
+            let mut fmt = vec![0u8; 16];
+            fmt[0..2].copy_from_slice(&tag.to_le_bytes());
+            let body = [b"WAVE".as_slice(), before, &chunk(b"fmt ", &fmt), &chunk(b"data", &[0u8; 4])].concat();
+            chunk(b"RIFF", &body)
+        };
+        let wav = |tag: u16| wav_with(&[], tag);
+        assert!(plays_in_window("wav", &wav(1)) && plays_in_window("WAV", &wav(3)) && plays_in_window("wav", &wav(0xFFFE)));
+        assert!(!plays_in_window("wav", &wav(2)), "ADPCM");
+        assert!(plays_in_window("wav", &wav_with(&chunk(b"JUNK", &[0u8; 27]), 3)), "a chunk before fmt, of odd size");
+        assert!(!plays_in_window("wav", &[0u8; 44]), "not a RIFF WAVE");
+        assert!(plays_in_window("mp3", &[]) && plays_in_window("aac", &[]));
+        assert!(!plays_in_window("m4a", &[]), "an M4A whose codec is not read as AAC is converted");
+        assert!(!plays_in_window("mka", &[]) && !plays_in_window("caf", &[]) && !plays_in_window("aiff", &[]));
     }
 
     #[test]
@@ -427,7 +517,7 @@ mod live {
         write_wav16k_mono(&track, &output).expect("decode the track");
         let size = std::fs::metadata(&output).expect("the wav exists").len();
         assert!(size > 44, "the wav is nothing but a header: {size} bytes");
-        eprintln!("wav: {} bytes at {}", size, output.display());
+        studio_log!("wav: {} bytes at {}", size, output.display());
     }
 }
 

@@ -75,6 +75,14 @@ pub struct Component {
     pub revision: &'static str,
 }
 
+impl Component {
+    /// The file at its pinned revision on Hugging Face: what the studio downloads, and what a person
+    /// downloading by hand needs, since the repository's latest files may be other builds.
+    pub fn url(&self) -> String {
+        format!("https://huggingface.co/{}/resolve/{}/{}?download=true", self.repository, self.revision, self.filename)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct InstallRequest {
     pub profile_id: Option<String>,
@@ -378,10 +386,7 @@ impl ModelManager {
     async fn download_component(&self, component: &Component) -> Result<()> {
         let target = self.root.join(component.filename);
         let part = part_path(&target);
-        let url = format!(
-            "https://huggingface.co/{}/resolve/{}/{}?download=true",
-            component.repository, component.revision, component.filename
-        );
+        let url = crate::net::model_url(&component.url());
 
         // another program of timoncool's has this file: taken through the same checksum a download passes
         let name = Path::new(component.filename).file_name().unwrap_or_default();
@@ -830,6 +835,16 @@ mod tests {
         assert_eq!(profile_matching(&ids), Some("quality-q8"));
         let mixed: Vec<String> = ["vocoder-f32", "dit-q5", "lm-q8", "condition-f32", "depth-q8"].map(String::from).to_vec();
         assert_eq!(profile_matching(&mixed), None, "a mix of two sets is a custom set");
+    }
+
+    /// A file downloaded by hand is the pinned one: its address names the revision, not the branch, on Hugging
+    /// Face and on the mirror alike.
+    #[test]
+    fn a_manual_address_names_the_pinned_revision() {
+        let lm = components().into_iter().find(|component| component.id == "lm-q4").expect("the light set's language model");
+        assert_eq!(lm.url(), format!("https://huggingface.co/{LIGHT_REPOSITORY}/resolve/{LIGHT_REVISION}/mm3-lm-Q4_K_M.gguf?download=true"));
+        assert_eq!(crate::net::mirror_url(&lm.url()), format!("https://hf-mirror.com/{LIGHT_REPOSITORY}/resolve/{LIGHT_REVISION}/mm3-lm-Q4_K_M.gguf?download=true"));
+        assert!(components().iter().all(|component| !component.url().contains("/resolve/main/")));
     }
 
     #[test]

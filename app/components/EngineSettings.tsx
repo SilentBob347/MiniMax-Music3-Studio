@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, Check, Cpu, FolderOpen, Loader2, RotateCw , Terminal } from 'lucide-react';
 import { useI18n } from '../context/I18nContext';
+import { poll } from '../services/poll';
+import { SELF_READ } from '../services/studioQueries';
+import { DiagnosticsPanel } from './DiagnosticsPanel';
 
 /**
  * Launch options for the local engine.
@@ -56,7 +59,7 @@ const Toggle: React.FC<{ label: string; hint: string; checked: boolean; onChange
 export const EngineSettings: React.FC = () => {
   const { t } = useI18n();
   const [options, setOptions] = useState<EngineOptions>(DEFAULTS);
-  // With two cards or more, which one the studio computes on
+  // With two cards or more, or a chosen card no longer in the computer, which one the studio computes on
   const [cards, setCards] = useState<{ cards: { index: number; name: string; memory_gb: number }[]; running: number | null } | null>(null);
   useEffect(() => {
     void fetch('/v1/system/gpus').then(response => (response.ok ? response.json() : null)).then(setCards).catch(() => undefined);
@@ -145,13 +148,11 @@ export const EngineSettings: React.FC = () => {
   const [logsOpen, setLogsOpen] = useState(false);
   useEffect(() => {
     if (!logsOpen) return;
-    const read = () => void fetch('/v1/engine/logs')
+    const read = () => fetch('/v1/engine/logs', { headers: SELF_READ })
       .then(response => (response.ok ? response.json() : Promise.reject(new Error())))
       .then((body: { lines?: string[] }) => setLogs((body.lines ?? []).slice(-200)))
       .catch(() => undefined);
-    read();
-    const timer = window.setInterval(read, 2000);
-    return () => window.clearInterval(timer);
+    return poll(read, 2000);
   }, [logsOpen]);
 
   const restart = async () => {
@@ -196,7 +197,7 @@ export const EngineSettings: React.FC = () => {
         <span className="mt-2 block text-xs leading-5 text-zinc-500 dark:text-zinc-400">{t(`computeBackendHint_${options.backend}`)}</span>
       </div>
 
-      {cards && cards.cards.length > 1 && (
+      {cards && (cards.cards.length > 1 || (options.gpu != null && !cards.cards.some(card => card.index === options.gpu))) && (
         <label className="block rounded-xl border border-zinc-200 p-3 dark:border-white/10">
           <span className="block text-sm font-medium text-zinc-800 dark:text-zinc-100">{t('gpuChoice')}</span>
           <select
@@ -205,6 +206,7 @@ export const EngineSettings: React.FC = () => {
             className={`${CONTROL} mt-2`}
           >
             <option value="">{t('gpuChoiceFirst')}</option>
+            {options.gpu != null && !cards.cards.some(card => card.index === options.gpu) && <option value={String(options.gpu)}>{t('gpuChoiceMissing').replace('{index}', String(options.gpu))}</option>}
             {cards.cards.map(card => <option key={card.index} value={card.index}>{`${card.index}: ${card.name} · ${card.memory_gb.toFixed(0)} GB`}</option>)}
           </select>
           <span className="mt-2 block text-xs leading-5 text-zinc-500 dark:text-zinc-400">
@@ -355,6 +357,8 @@ export const EngineSettings: React.FC = () => {
           </div>
         )}
       </div>
+
+      <DiagnosticsPanel />
 
       {notice && (
         <p className="flex items-center gap-2 rounded-lg bg-emerald-500/10 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-300">

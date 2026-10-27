@@ -1,3 +1,5 @@
+#[macro_use]
+pub mod studio_log;
 mod processing;
 mod vst;
 mod adapters;
@@ -17,7 +19,12 @@ mod audio_pcm;
 mod legacy_text;
 mod downloads;
 mod cuda_build;
+#[cfg(windows)]
+mod dll_imports;
+mod diagnostics;
+mod pin_sha;
 mod engine_runtime;
+mod install_record;
 mod lyrics_db;
 mod mcp;
 mod lyrics_sync;
@@ -46,6 +53,10 @@ mod mm_result;
 mod openrouter_stream;
 mod progress;
 mod engine_log;
+mod song_errors;
+mod update_screen;
+
+use song_errors::SongError;
 
 use std::{collections::HashMap, env, fs, net::SocketAddr, path::PathBuf, sync::Arc};
 use anyhow::Context;
@@ -148,6 +159,8 @@ struct AppState {
     prepare: prepare::Shared,
     prepare_cancel: Arc<std::sync::atomic::AtomicBool>,
     prepare_train: prepare::TrainSlot,
+    /// The update screen's download, while it runs and after.
+    update_job: Arc<RwLock<Option<update_screen::Job>>>,
 }
 
 #[derive(Clone)]
@@ -192,6 +205,9 @@ struct CreateMusicJobRequest {
     /// Installed adapters to merge for this song, in order.
     #[serde(default)]
     adapters: Vec<AdapterUse>,
+    /// Audio codes of an earlier song, from the form's field: the engine decodes them and skips its language model.
+    #[serde(default)]
+    audio_codes: Option<String>,
 }
 
 /// One adapter of a request: its folder and a strength per engine slot. A slot
@@ -287,9 +303,30 @@ struct MusicJob {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     songs: Vec<CompletedSong>,
     message: String,
+    /// What a failed job's message says, as a code and fields the window translates (`song_errors`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    params: Option<serde_json::Map<String, Value>>,
     /// The playlist the made songs go into, a project the user works in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     playlist_id: Option<String>,
+}
+
+impl MusicJob {
+    /// Ends the job as failed, for this reason.
+    fn fail(&mut self, error: SongError) {
+        self.status = MusicJobStatus::Failed;
+        self.phase = MusicJobPhase::Failed;
+        self.say(error);
+    }
+
+    /// The message and, for a reason the window translates, its code and fields.
+    fn say(&mut self, error: SongError) {
+        self.code = error.code();
+        self.params = self.code.map(|_| error.params());
+        self.message = error.to_string();
+    }
 }
 
 fn job_status_name(status: &MusicJobStatus) -> &'static str {
@@ -344,6 +381,8 @@ fn job_from_stored(stored: library::StoredJob, status: MusicJobStatus, message: 
         song: None,
         songs: vec![],
         message,
+        code: None,
+        params: None,
         playlist_id: stored.playlist_id,
     }
 }
@@ -357,13 +396,13 @@ const MAX_RESUMES: u32 = 3;
 async fn resume_unfinished_jobs(state: AppState) {
     // the window lists only songs in flight, so what ended without a result in an earlier run is not kept
     if let Err(error) = state.library.forget_ended_music_jobs() {
-        eprintln!("[ERROR] the songs that ended without a result could not be cleared: {error:#}");
+        studio_log!("[ERROR] the songs that ended without a result could not be cleared: {error:#}");
     }
     let cut_off = match state.library.unfinished_music_jobs() {
         Ok(jobs) if !jobs.is_empty() => jobs,
         Ok(_) => return,
         Err(error) => {
-            eprintln!("[ERROR] the songs cut off by the last run could not be read: {error:#}");
+            studio_log!("[ERROR] the songs cut off by the last run could not be read: {error:#}");
             return;
         }
     };
@@ -378,7 +417,7 @@ async fn resume_unfinished_jobs(state: AppState) {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
     if !ready {
-        eprintln!("[ERROR] the engine did not answer; {} cut-off song(s) were not started again", cut_off.len());
+        studio_log!("[ERROR] the engine did not answer; {} cut-off song(s) were not started again", cut_off.len());
         return;
     }
     for old in cut_off {
@@ -410,7 +449,7 @@ async fn resume_unfinished_jobs(state: AppState) {
             }
         };
         if let Err(error) = state.library.cancel_cut_off_music_job(&old.id, resumed_as.as_deref(), &message) {
-            eprintln!("[ERROR] a cut-off song could not be marked: {error:#}");
+            studio_log!("[ERROR] a cut-off song could not be marked: {error:#}");
         }
         state.jobs.write().await.insert(old.id.clone(), job_from_stored(old, MusicJobStatus::Cancelled, message));
     }
@@ -594,7 +633,7 @@ impl EngineOptions {
         }
         // Off Windows the engine is a single native build whose ggml loads its
         // own best device - Metal on Apple Silicon, Vulkan in the Linux
-        // package - so Auto asks the engine to choose (no GGML_BACKEND is set)
+        // package - so Auto asks the engine to choose (no --device is passed)
         // and only falls back to the processor if that start fails.
         #[cfg(not(windows))]
         {
@@ -803,11 +842,19 @@ struct OpenRouterResponse {
 /// in-process, so a release is a single executable rather than a launcher that
 /// has to start a second binary and keep it alive.
 pub async fn serve() -> anyhow::Result<()> {
+    match studio_data_root() {
+        Some(root) => {
+            studio_log::log_to_file(&root);
+            std::thread::spawn(move || install_record::sweep_aside(&root));
+        }
+        None => studio_log!("[ERROR] the studio has no data folder; its log goes to the console only"),
+    }
+    put_the_engine_folder_on_path();
     let settings_path = studio_settings_path();
     let persisted = load_studio_settings(&settings_path);
     let proxy = persisted.as_ref().and_then(|settings| settings.proxy.clone()).unwrap_or_default();
     if let Err(error) = proxy.clone().validated() {
-        eprintln!("[ERROR] the saved proxy cannot be used, requests go straight out until it is fixed in Settings: {error:#}");
+        studio_log!("[ERROR] the saved proxy cannot be used, requests go straight out until it is fixed in Settings: {error:#}");
     }
     net::set(proxy);
     let (bind_to, network_keyed) = remote::start(persisted.as_ref().and_then(|settings| settings.network.clone()));
@@ -876,6 +923,7 @@ pub async fn serve() -> anyhow::Result<()> {
         prepare: Arc::new(std::sync::Mutex::new(None)),
         prepare_cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         prepare_train: Arc::new(std::sync::Mutex::new(None)),
+        update_job: Arc::new(RwLock::new(None)),
         adapters: Arc::new(adapters::AdapterLibrary::new(
             &studio_data_root().unwrap_or_else(|| std::path::PathBuf::from(".")),
             PRIMARY_MUSIC_ENGINE_ID,
@@ -911,14 +959,10 @@ pub async fn serve() -> anyhow::Result<()> {
     state.training.recover();
     if network_keyed {
         if let Err(error) = persist_studio_settings(&state).await {
-            eprintln!("[ERROR] the key made for access from the network was not saved and changes at the next start: {error:#}");
+            studio_log!("[ERROR] the key made for access from the network was not saved and changes at the next start: {error:#}");
         }
     }
     state.lyrics_sync.set_cuda_libraries(state.engine_runtime.library_dir());
-    {
-        let sync = state.lyrics_sync.clone();
-        tokio::task::spawn_blocking(move || sync.remove_retired_parakeet());
-    }
     prepare::resume(&state);
     tokio::spawn(resume_unfinished_jobs(state.clone()));
     {
@@ -928,9 +972,9 @@ pub async fn serve() -> anyhow::Result<()> {
             let library = state.library.clone();
             match tokio::task::spawn_blocking(move || library.remeasure_imported_mp3s()).await {
                 Ok(Ok(0)) => {}
-                Ok(Ok(fixed)) => eprintln!("[library] measured the length of {fixed} imported MP3s again"),
-                Ok(Err(error)) => eprintln!("[library] the imported MP3s were not measured again: {error:#}"),
-                Err(error) => eprintln!("[library] the imported MP3s were not measured again: {error}"),
+                Ok(Ok(fixed)) => studio_log!("[library] measured the length of {fixed} imported MP3s again"),
+                Ok(Err(error)) => studio_log!("[library] the imported MP3s were not measured again: {error:#}"),
+                Err(error) => studio_log!("[library] the imported MP3s were not measured again: {error}"),
             }
             tag_untagged_songs(state.clone()).await;
             pin_placeholders(state).await;
@@ -1092,8 +1136,15 @@ pub async fn serve() -> anyhow::Result<()> {
         .route("/setup/remove", post(setup_remove))
         .route("/setup/adopt", post(setup_adopt))
         .route("/v1/open-data-directory", post(open_data_directory))
+        .route("/v1/diagnostics", get(diagnostics::get))
+        .route("/v1/diagnostics/report", post(diagnostics::make_report))
+        .route("/v1/diagnostics/report/reveal", post(diagnostics::reveal_report))
+        .route("/v1/diagnostics/logs/reveal", post(diagnostics::reveal_logs))
         .route("/setup/select", post(setup_select))
         .route("/setup/cancel", post(setup_cancel))
+        .route("/setup/update", get(setup_update))
+        .route("/setup/update/apply", post(setup_update_apply))
+        .route("/setup/update/seen", post(setup_update_seen))
         .route("/v1/local-models/music", get(local_music_model_catalog))
         .route("/v1/music/jobs", post(create_music_job).get(list_active_music_jobs))
         .route("/v1/music/replay", post(replay_music_job))
@@ -1168,7 +1219,7 @@ pub async fn serve() -> anyhow::Result<()> {
                     let state = state.clone();
                     tokio::spawn(async move {
                         if let Err(error) = rescan_resources(&state).await {
-                            eprintln!("[ERROR] finding the downloaded model: {error}");
+                            studio_log!("[ERROR] finding the downloaded model: {error}");
                         }
                     });
                 }
@@ -1205,7 +1256,7 @@ pub async fn serve() -> anyhow::Result<()> {
                             // seconds: a card with too little memory would
                             // otherwise fill the log with the same line.
                             if !complained {
-                                eprintln!("the local engine did not start: {error}");
+                                studio_log!("the local engine did not start: {error}");
                                 complained = true;
                             }
                         }
@@ -1227,7 +1278,26 @@ pub async fn serve() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn library_songs(State(state): State<AppState>) -> Result<Json<Vec<library::Song>>, (StatusCode, Json<ApiError>)> { state.library.list_songs().map(Json).map_err(|e|api_error(StatusCode::INTERNAL_SERVER_ERROR,e.to_string())) }
+async fn library_songs(State(state): State<AppState>) -> Result<Json<Vec<Value>>, (StatusCode, Json<ApiError>)> {
+    let songs = state.library.list_songs().map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    songs.iter().map(listed_song).collect::<Result<Vec<_>, _>>().map(Json).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+/// A song as the library's list carries it: without the replay request and
+/// the semantic stream, which only a re-render reads, from the song itself.
+fn listed_song(song: &library::Song) -> serde_json::Result<Value> {
+    let mut value = serde_json::to_value(song)?;
+    if let Some(fields) = value.as_object_mut() {
+        fields.remove("replay_request");
+        fields.remove("audio_codes");
+        fields.insert("replay_available".into(), Value::Bool(kept(&song.replay_request) && kept(&song.audio_codes)));
+    }
+    Ok(value)
+}
+
+fn kept(value: &Option<Value>) -> bool {
+    value.as_ref().is_some_and(|value| !value.is_null() && value.as_str() != Some(""))
+}
 
 #[derive(Deserialize)]
 struct LikeInput {
@@ -1575,6 +1645,11 @@ async fn separation_assets(State(state): State<AppState>) -> Json<Value> {
     let bytes = runtime_progress["bytes"].as_u64().unwrap_or(0) + separation::MODEL.bytes;
     let installed_bytes = runtime_progress["installed_bytes"].as_u64().unwrap_or(0)
         + if model_installed { separation::MODEL.bytes } else { 0 };
+    // the model comes first and its finished record stays; the runtime downloading after it is the one to show
+    let active_download = match (state.separator.downloader().active_for("separation").await, state.lyrics_sync.downloader().active_for("separation").await) {
+        (Some(model), Some(runtime)) if model.done && !runtime.done => Some(runtime),
+        (model, runtime) => model.or(runtime),
+    };
     Json(serde_json::json!({
         "assets": assets,
         "settings": { "runtime": config.runtime, "engine": config.engine },
@@ -1586,7 +1661,7 @@ async fn separation_assets(State(state): State<AppState>) -> Json<Value> {
         },
         // Only this panel's own download. The recogniser shares this
         // downloader, and its gigabytes are not the separator's business.
-        "active_download": state.separator.downloader().active_for("separation").await.or(state.lyrics_sync.downloader().active_for("separation").await),
+        "active_download": active_download,
         // Not an error and not a stall: the file server is asking us to wait.
         "waiting_for_server": crate::chunked::waiting_for_server(),
     }))
@@ -1670,8 +1745,18 @@ async fn install_separation_asset(
     // The separator as one thing: its model, the runtime that loads it, and -
     // for the card - the CUDA provider. Six rows of file names asked the user
     // to work out which of them belong together.
-    if matches!(request.asset_id.as_str(), "auto" | "cuda" | "cpu") && state.separation_config.read().await.engine == separation::Engine::Roformer {
-        let wanted = if request.asset_id == "cpu" { lyrics_sync::OnnxFlavour::Cpu } else { lyrics_sync::OnnxFlavour::Auto };
+    // the settings' stems card names an engine (htdemucs, roformer) and leaves the device to the settings; the setup
+    // screen names a device and leaves the engine to the settings
+    let (chosen_engine, chosen_runtime) = { let config = state.separation_config.read().await; (config.engine, config.runtime) };
+    let device = |id: &str| if id == "cpu" { lyrics_sync::OnnxFlavour::Cpu } else { lyrics_sync::OnnxFlavour::Auto };
+    let (engine, device_id) = match request.asset_id.as_str() {
+        "roformer" => (Some(separation::Engine::Roformer), if chosen_runtime == lyrics_sync::OnnxFlavour::Cpu { "cpu" } else { "auto" }),
+        "htdemucs" => (Some(separation::Engine::Htdemucs), if chosen_runtime == lyrics_sync::OnnxFlavour::Cpu { "cpu" } else { "auto" }),
+        id @ ("auto" | "cuda" | "cpu") => (Some(chosen_engine), id),
+        _ => (None, ""),
+    };
+    if engine == Some(separation::Engine::Roformer) {
+        let wanted = device(device_id);
         let gpu = roformer_on_card(&state, wanted);
         let set = roformer_set(gpu);
         if set.len() < 2 {
@@ -1683,18 +1768,18 @@ async fn install_separation_asset(
             match separator.downloader().install_all("separation", &set).await {
                 Ok(()) if gpu => {
                     if let Err(error) = separator.link_cuda_libraries(&libraries) {
-                        eprintln!("[ERROR] BSRoformer.cpp has no cuBLAS beside it: {error:#}");
+                        studio_log!("[ERROR] BSRoformer.cpp has no cuBLAS beside it: {error:#}");
                         separator.downloader().fail("separation", format!("BSRoformer.cpp has no cuBLAS beside it: {error:#}")).await;
                     }
                 }
                 Ok(()) => {}
-                Err(error) => eprintln!("[ERROR] Mel-Band RoFormer could not be installed: {error:#}"),
+                Err(error) => studio_log!("[ERROR] Mel-Band RoFormer could not be installed: {error:#}"),
             }
         });
         return Ok(Json(serde_json::json!({ "started": true })));
     }
-    if matches!(request.asset_id.as_str(), "auto" | "cuda" | "cpu") {
-        let wanted = if request.asset_id == "cpu" { lyrics_sync::OnnxFlavour::Cpu } else { lyrics_sync::OnnxFlavour::Auto };
+    if engine == Some(separation::Engine::Htdemucs) {
+        let wanted = device(device_id);
         let separator = state.separator.clone();
         let sync = state.lyrics_sync.clone();
         let mut runtime: Vec<&'static lyrics_sync::Asset> = Vec::new();
@@ -1702,11 +1787,11 @@ async fn install_separation_asset(
         runtime.extend(separation_card_assets(wanted).iter().filter_map(|id| lyrics_sync::asset(id)));
         tokio::spawn(async move {
             if let Err(error) = separator.downloader().install_all("separation", &[&separation::MODEL]).await {
-                eprintln!("the separator model could not be installed: {error}");
+                studio_log!("the separator model could not be installed: {error}");
                 return;
             }
             if let Err(error) = sync.downloader().install_all("separation", &runtime).await {
-                eprintln!("the separator runtime could not be installed: {error}");
+                studio_log!("the separator runtime could not be installed: {error}");
             }
         });
         return Ok(Json(serde_json::json!({ "started": true })));
@@ -1716,7 +1801,7 @@ async fn install_separation_asset(
         let card: Vec<&'static lyrics_sync::Asset> = separation_card_assets(lyrics_sync::OnnxFlavour::Auto).iter().filter_map(|id| lyrics_sync::asset(id)).collect();
         tokio::spawn(async move {
             if let Err(error) = sync.downloader().install_all("separation", &card).await {
-                eprintln!("the card path could not be installed: {error}");
+                studio_log!("the card path could not be installed: {error}");
             }
         });
         return Ok(Json(serde_json::json!({ "started": true })));
@@ -1775,12 +1860,16 @@ async fn separation_status(State(state): State<AppState>) -> Json<Value> {
     let runtime = state.lyrics_sync.onnxruntime_library();
     let (engine, runtime_choice) = { let config = state.separation_config.read().await; (config.engine, config.runtime) };
     let card = lyrics_sync::OnnxFlavour::Auto.card().filter(|card| separates_on(*card));
+    let on_card = roformer_on_card(&state, runtime_choice);
     let model = match engine {
+        separation::Engine::Roformer if state.separator.downloader().is_installed(&separation::ROFORMER_MODEL) => {
+            separation::Separator::roformer_engine(on_card).unwrap_or(&separation::ROFORMER_MODEL)
+        }
         separation::Engine::Roformer => &separation::ROFORMER_MODEL,
         separation::Engine::Htdemucs => &separation::MODEL,
     };
     let model_installed = match engine {
-        separation::Engine::Roformer => state.separator.roformer_installed(roformer_on_card(&state, runtime_choice)),
+        separation::Engine::Roformer => state.separator.roformer_installed(on_card),
         separation::Engine::Htdemucs => state.separator.is_installed(),
     };
     Json(serde_json::json!({
@@ -1829,6 +1918,9 @@ async fn separation_status(State(state): State<AppState>) -> Json<Value> {
 /// Fetches the separation model. Nothing here downloads on its own; this is the
 /// button, and it also brings the runtime if karaoke has not already.
 async fn install_separation_model(State(state): State<AppState>) -> Result<Json<Value>, (StatusCode, Json<ApiError>)> {
+    if state.separation_config.read().await.engine == separation::Engine::Roformer {
+        return install_separation_asset(State(state), Json(InstallSeparationAssetRequest { asset_id: "roformer".into() })).await;
+    }
     let separator = state.separator.clone();
     let sync = state.lyrics_sync.clone();
     tokio::spawn(async move {
@@ -2223,7 +2315,7 @@ async fn keep_processing(
         Err(problem) => {
             // the preview goes back where it was, so the run can still be kept or discarded
             if let Err(error) = std::fs::rename(&stored, &preview) {
-                eprintln!("[ERROR] processing: return {} to the workspace: {error}", stored.display());
+                studio_log!("[ERROR] processing: return {} to the workspace: {error}", stored.display());
             }
             return Err(problem);
         }
@@ -2263,8 +2355,8 @@ async fn upload_processing_reference(
             .extension()
             .and_then(|value| value.to_str())
             .map(str::to_ascii_lowercase)
-            .filter(|value| matches!(value.as_str(), "mp3" | "wav" | "flac" | "ogg" | "m4a" | "aiff" | "aif"))
-            .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "the reference must be MP3, WAV, FLAC, OGG or M4A".into()))?;
+            .filter(|value| audio_pcm::reads_audio(value))
+            .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, format!("the reference must be audio the studio reads: {}", audio_pcm::AUDIO_EXTENSIONS.join(", "))))?;
         let bytes = field.bytes().await.map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("read the upload: {e}")))?;
         let folder = processing::workspace(state.library.media_dir());
         std::fs::create_dir_all(&folder).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -2306,7 +2398,7 @@ async fn remove_song_version(
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Song not found".into()))?;
     if let Some(file) = file {
         if let Err(error) = std::fs::remove_file(&file) {
-            eprintln!("[ERROR] remove version {version} of {id}: {error}");
+            studio_log!("[ERROR] remove version {version} of {id}: {error}");
         }
     }
     Ok(Json(song))
@@ -2408,11 +2500,13 @@ async fn read_training(State(state): State<AppState>) -> Json<Value> {
                     Err(reason) => value["resume_refused"] = serde_json::json!(reason),
                 }
             }
-            if active.as_deref() == Some(run.id.as_str()) || run.status == training::RunStatus::Failed {
-                value["log"] = serde_json::json!(training.log_tail(&run.id, 12));
-            }
-            if active.as_deref() == Some(run.id.as_str()) {
-                value["device"] = serde_json::json!(training.run_device(&run.id));
+            let going = active.as_deref() == Some(run.id.as_str());
+            if going || run.status == training::RunStatus::Failed {
+                let (log, device) = training.log_view(&run.id, 12);
+                value["log"] = serde_json::json!(log);
+                if going {
+                    value["device"] = serde_json::json!(device);
+                }
             }
             value
         })
@@ -2512,11 +2606,11 @@ async fn install_training_pack(State(state): State<AppState>) -> Result<Json<Val
     let background = state.clone();
     tokio::spawn(async move {
         if let Err(error) = background.training.install_pack().await {
-            eprintln!("[ERROR] training pack: {error:#}");
+            studio_log!("[ERROR] training pack: {error:#}");
             return;
         }
         if let Err(error) = background.engine_runtime.install_missing(cuda_build::CudaBuild::Cuda13).await {
-            eprintln!("[ERROR] cuBLAS for the trainer: {error:#}");
+            studio_log!("[ERROR] cuBLAS for the trainer: {error:#}");
         }
     });
     Ok(Json(serde_json::json!({ "started": true })))
@@ -2528,13 +2622,13 @@ async fn install_listen_pack(State(state): State<AppState>) -> Json<Value> {
     let background = state.clone();
     tokio::spawn(async move {
         if let Err(error) = background.training.install_listen().await {
-            eprintln!("[ERROR] listening pack: {error:#}");
+            studio_log!("[ERROR] listening pack: {error:#}");
             return;
         }
         if background.lyrics_sync.onnxruntime_library().is_none() {
             let runtime: Vec<&'static lyrics_sync::Asset> = lyrics_sync::asset("onnxruntime").into_iter().collect();
             if let Err(error) = background.lyrics_sync.downloader().install_all("listen", &runtime).await {
-                eprintln!("[ERROR] ONNX Runtime for the listening pack: {error:#}");
+                studio_log!("[ERROR] ONNX Runtime for the listening pack: {error:#}");
             }
         }
     });
@@ -2618,11 +2712,11 @@ async fn import_training_dataset(State(state): State<AppState>, mut multipart: M
 async fn reveal_training_dataset(State(state): State<AppState>, Path(id): Path<String>) -> Result<Json<Value>, (StatusCode, Json<ApiError>)> {
     let folder = state.training.dataset_folder(&id).map_err(training_error)?;
     #[cfg(windows)]
-    let opened = std::process::Command::new("explorer.exe").arg(&folder).spawn();
+    let opened = music_engine::process_group::detach_from_group(&mut std::process::Command::new("explorer.exe")).arg(&folder).spawn();
     #[cfg(target_os = "macos")]
     let opened = std::process::Command::new("open").arg(&folder).spawn();
     #[cfg(all(not(windows), not(target_os = "macos")))]
-    let opened = std::process::Command::new("xdg-open").arg(&folder).spawn();
+    let opened = music_engine::process_group::detach_from_group(&mut dub_core::proc::host_command("xdg-open")).arg(&folder).spawn();
     opened.map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
     Ok(Json(serde_json::json!({ "opened": folder.display().to_string() })))
 }
@@ -2691,14 +2785,14 @@ async fn upload_training_files(State(state): State<AppState>, Path(id): Path<Str
             let bytes = field.bytes().await.map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("read {name}: {e}")))?;
             let (file, tracks) = training::cue_sheet(&bytes);
             cues.push((stem, file, tracks));
-        } else if [".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aiff", ".aif"].iter().any(|extension| lower.ends_with(extension)) {
+        } else if std::path::Path::new(&lower).extension().and_then(|extension| extension.to_str()).is_some_and(audio_pcm::reads_audio) {
             let path = folder.0.join(format!("{}-{name}", audio.len()));
             save_upload(field, &path).await?;
             audio.push((path, stem, name, relative));
         }
     }
     if audio.is_empty() {
-        return Err(api_error(StatusCode::BAD_REQUEST, "no audio in the upload: WAV, MP3, FLAC, OGG or M4A".into()));
+        return Err(api_error(StatusCode::BAD_REQUEST, format!("no audio in the upload: {}", audio_pcm::AUDIO_EXTENSIONS.join(", "))));
     }
     let training = state.training.clone();
     let outcome = tokio::task::spawn_blocking(move || {
@@ -2784,7 +2878,7 @@ async fn card_hooks(state: &AppState) -> training::CardHooks {
                 if keep_loaded {
                     if let Some(engine) = take_state.engine.lock().await.as_mut() {
                         if let Err(error) = tokio::task::block_in_place(|| engine.stop(std::time::Duration::from_secs(10))) {
-                            eprintln!("[ERROR] stopping the engine for training: {error}");
+                            studio_log!("[ERROR] stopping the engine for training: {error}");
                         }
                     }
                 }
@@ -2794,7 +2888,7 @@ async fn card_hooks(state: &AppState) -> training::CardHooks {
             Box::pin(async move {
                 if keep_loaded {
                     if let Err(error) = restart_engine(&back_state).await {
-                        eprintln!("[ERROR] starting the engine after training: {error}");
+                        studio_log!("[ERROR] starting the engine after training: {error}");
                     }
                 }
             })
@@ -2999,7 +3093,7 @@ async fn describe_training_item(
         let draft = match assistant_write(State(state.clone()), Json(request.clone())).await {
             Ok(Json(draft)) => draft,
             Err(error) if attempt == 0 => {
-                eprintln!("[WARN] describing {}: {}", song.title, error.1.0.error);
+                studio_log!("[WARN] describing {}: {}", song.title, error.1.0.error);
                 continue;
             }
             Err(error) => return Err(error),
@@ -3244,9 +3338,7 @@ async fn read_activity(State(state): State<AppState>) -> Json<Value> {
 async fn ensure_local_recogniser(state: &AppState, config: &lyrics_sync::LyricsSyncConfig, song_id: &str) -> bool {
     let ready = |state: &AppState| match config.provider {
         lyrics_sync::AsrProvider::Parakeet => state.lyrics_sync.parakeet_ready(config.runtime, config.whisper_model.as_deref()),
-        lyrics_sync::AsrProvider::Whisper => {
-            state.lyrics_sync.whisper_binary().is_some() && state.lyrics_sync.whisper_model_ready(config)
-        }
+        lyrics_sync::AsrProvider::Whisper => state.lyrics_sync.crisper_ready(config.runtime),
         _ => true,
     };
     if ready(state) {
@@ -3277,7 +3369,7 @@ async fn ensure_local_recogniser(state: &AppState, config: &lyrics_sync::LyricsS
     note_activity(state, song_id, &title, "karaoke", "running", Some("karaoke.downloading".into())).await;
     for asset in missing {
         if let Err(error) = state.lyrics_sync.downloader().install(asset).await {
-            eprintln!("could not fetch the karaoke model {}: {error}", asset.id);
+            studio_log!("could not fetch the karaoke model {}: {error}", asset.id);
             note_activity(state, song_id, &title, "karaoke", "failed", Some(format!("{error:#}"))).await;
             return false;
         }
@@ -3345,8 +3437,7 @@ async fn time_lyrics_for(state: AppState, song_id: String) {
             let sync = state.lyrics_sync.clone();
             let config = config.clone();
             let path = std::path::PathBuf::from(&audio);
-            let lyrics = song.lyrics.clone();
-            match tokio::task::spawn_blocking(move || sync.whisper_words(&config, &path, None, &lyrics)).await {
+            match tokio::task::spawn_blocking(move || sync.crisper_words(config.runtime, &path, None)).await {
                 Ok(result) => result,
                 Err(error) => Err(anyhow::anyhow!("the recogniser stopped: {error}")),
             }
@@ -3358,7 +3449,7 @@ async fn time_lyrics_for(state: AppState, song_id: String) {
     let words = match words {
         Ok(words) => words,
         Err(error) => {
-            eprintln!("no karaoke for {song_id}: {error}");
+            studio_log!("no karaoke for {song_id}: {error}");
             note_activity(&state, &song_id, &song.title, "karaoke", "failed", Some(format!("{error:#}"))).await;
             return;
         }
@@ -3366,14 +3457,14 @@ async fn time_lyrics_for(state: AppState, song_id: String) {
     let lines = lyrics_sync::align_lyrics_words(&words, &song.lyrics);
     if lines.is_empty() {
         let reason = "karaoke.no-match";
-        eprintln!("no karaoke for {song_id}: {reason}");
+        studio_log!("no karaoke for {song_id}: {reason}");
         note_activity(&state, &song_id, &song.title, "karaoke", "failed", Some(reason.to_string())).await;
         return;
     }
     match state.library.set_song_lrc(&song_id, &lyrics_sync::enhanced_lrc(&lines)) {
         Ok(_) => note_activity(&state, &song_id, &song.title, "karaoke", "done", None).await,
         Err(error) => {
-            eprintln!("could not store karaoke for {song_id}: {error}");
+            studio_log!("could not store karaoke for {song_id}: {error}");
             note_activity(&state, &song_id, &song.title, "karaoke", "failed", Some(format!("{error:#}"))).await;
         }
     }
@@ -3394,7 +3485,7 @@ async fn draw_cover_for(state: AppState, song_id: String) {
     match draw_cover(&state, &song_id).await {
         Ok(()) => note_activity(&state, &song_id, &title, "cover", "done", None).await,
         Err(error) => {
-            eprintln!("no cover for {song_id}: {error}");
+            studio_log!("no cover for {song_id}: {error}");
             note_activity(&state, &song_id, &title, "cover", "failed", Some(format!("{error:#}"))).await;
         }
     }
@@ -3521,14 +3612,14 @@ async fn draw_cover_unused(state: AppState, song_id: String) {
     let request = match providers::openrouter::request_for(&catalog, Capability::CoverArt, &model, &prompt) {
         Ok(request) => request,
         Err(error) => {
-            eprintln!("no cover for {song_id}: {error}");
+            studio_log!("no cover for {song_id}: {error}");
             return;
         }
     };
     let answered = match execute_openrouter_json(request).await {
         Ok(answered) => answered,
         Err(error) => {
-            eprintln!("no cover for {song_id}: {error}");
+            studio_log!("no cover for {song_id}: {error}");
             return;
         }
     };
@@ -3540,13 +3631,13 @@ async fn draw_cover_unused(state: AppState, song_id: String) {
         .and_then(Value::as_str)
         .map(str::to_owned);
     let Some(image) = image else {
-        eprintln!("no cover for {song_id}: the model returned no image");
+        studio_log!("no cover for {song_id}: the model returned no image");
         return;
     };
     use base64::{engine::general_purpose::STANDARD, Engine};
     let Ok(bytes) = STANDARD.decode(image.trim()) else { return };
     if let Err(error) = state.library.store_song_cover(&song_id, &bytes, "image/png") {
-        eprintln!("could not store the cover for {song_id}: {error}");
+        studio_log!("could not store the cover for {song_id}: {error}");
         return;
     }
     tag_stored_song(&state, &song_id).await;
@@ -3610,7 +3701,7 @@ async fn write_file_tags(State(state): State<AppState>, Json(request): Json<File
                         tag_stored_song(&state, &song.id).await;
                     }
                 }
-                Err(error) => eprintln!("[ERROR] the library did not list its tracks for tagging: {error:#}"),
+                Err(error) => studio_log!("[ERROR] the library did not list its tracks for tagging: {error:#}"),
             }
         });
     }
@@ -3704,8 +3795,8 @@ async fn tag_stored_song(state: &AppState, song_id: &str) {
     .await;
     match written {
         Ok(Ok(())) => {}
-        Ok(Err(error)) => eprintln!("could not tag {shown}: {error}"),
-        Err(error) => eprintln!("could not tag {shown}: the tagging task stopped: {error}"),
+        Ok(Err(error)) => studio_log!("could not tag {shown}: {error}"),
+        Err(error) => studio_log!("could not tag {shown}: the tagging task stopped: {error}"),
     }
 }
 
@@ -3717,7 +3808,7 @@ async fn tag_untagged_songs(state: AppState) {
     let songs = match state.library.list_songs() {
         Ok(songs) => songs,
         Err(error) => {
-            eprintln!("[ERROR] the library did not list its tracks for tagging: {error:#}");
+            studio_log!("[ERROR] the library did not list its tracks for tagging: {error:#}");
             return;
         }
     };
@@ -3799,7 +3890,7 @@ async fn write_cover_look(
     match tokio::fs::remove_dir_all(&drawn).await {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => eprintln!("[ERROR] the old placeholders in {} stay: {error}", drawn.display()),
+        Err(error) => studio_log!("[ERROR] the old placeholders in {} stay: {error}", drawn.display()),
     }
     tokio::spawn(pin_placeholders(state.clone()));
     Ok(Json(cover_look_reply(&state).await))
@@ -3835,7 +3926,7 @@ async fn placeholder_image(
             Ok(None) => {}
             Err(error) => {
                 cover_art::photo_failed(true);
-                eprintln!("[ERROR] no photo for {}: {error:#}", song.id);
+                studio_log!("[ERROR] no photo for {}: {error:#}", song.id);
                 *state.cover_problem.write().await = Some(format!("{error:#}"));
             }
         }
@@ -3920,7 +4011,7 @@ async fn pin_pass(state: &AppState) {
     let songs = match state.library.list_songs() {
         Ok(songs) => songs,
         Err(error) => {
-            eprintln!("[ERROR] the library did not list its tracks for their covers: {error:#}");
+            studio_log!("[ERROR] the library did not list its tracks for their covers: {error:#}");
             return;
         }
     };
@@ -3928,7 +4019,7 @@ async fn pin_pass(state: &AppState) {
         songs.into_iter().partition(|song| derived_from(song).is_some_and(|(_, tool)| tool == "stems"));
     for song in songs.into_iter().chain(stems) {
         if let Err(error) = pin_placeholder(state, &song.id).await {
-            eprintln!("[ERROR] no placeholder cover for {}: {error:#}", song.id);
+            studio_log!("[ERROR] no placeholder cover for {}: {error:#}", song.id);
         }
     }
 }
@@ -3964,7 +4055,7 @@ async fn placeholder_cover(State(state): State<AppState>, Path(id): Path<String>
                 .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("{error:#}")))?;
             let extension = if media_type == "image/png" { "png" } else { "jpg" };
             if let Err(error) = std::fs::create_dir_all(&folder).and_then(|()| std::fs::write(named(&label, extension), &image)) {
-                eprintln!("[ERROR] the placeholder of {id} was drawn but not kept: {error}");
+                studio_log!("[ERROR] the placeholder of {id} was drawn but not kept: {error}");
             }
             (image, media_type)
         }
@@ -4077,7 +4168,7 @@ async fn choose_cover_pattern(
 async fn cover_after_import(state: AppState, song_id: String) {
     draw_cover_for(state.clone(), song_id.clone()).await;
     if let Err(error) = pin_placeholder(&state, &song_id).await {
-        eprintln!("[ERROR] no placeholder cover for {song_id}: {error:#}");
+        studio_log!("[ERROR] no placeholder cover for {song_id}: {error:#}");
     }
 }
 
@@ -4108,8 +4199,17 @@ async fn import_library_audio(State(state): State<AppState>, mut multipart: Mult
         else { let value = field.text().await.map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("read import field: {e}")))?; match name.as_str() { "title" => title = Some(value), "caption" => caption = value, "lyrics" => lyrics = value, _ => {} } }
     }
     let filename = filename.ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "audio file is required".into()))?;
-    let extension = std::path::Path::new(&filename).extension().and_then(|value| value.to_str()).unwrap_or_default().to_owned();
-    let audio = audio.ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "audio file is required".into()))?;
+    let mut extension = std::path::Path::new(&filename).extension().and_then(|value| value.to_str()).unwrap_or_default().to_ascii_lowercase();
+    let mut audio = audio.ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "audio file is required".into()))?;
+    if !audio_pcm::reads_audio(&extension) {
+        return Err(api_error(StatusCode::BAD_REQUEST, format!("{filename} is not audio the studio reads: {}", audio_pcm::AUDIO_EXTENSIONS.join(", "))));
+    }
+    // the player plays MP3, FLAC, Ogg, AAC and plain WAV: anything else is kept as FLAC, losslessly
+    if !audio_pcm::plays_in_window(&extension, &audio) {
+        let decoded = audio_pcm::decode_stereo_bytes(audio, &extension).map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("decode {filename}: {e:#}")))?;
+        audio = audio_post::encode::flac(&decoded).map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("keep {filename} as FLAC: {e:#}")))?;
+        extension = "flac".into();
+    }
     // What the form leaves out comes from the file's own tags: any file's title and words, and
     // from a track a studio made its style, the person's note and what it was made with.
     let tags = tagging::read_tags(&audio);
@@ -4140,7 +4240,7 @@ async fn update_library_song(State(state):State<AppState>,Path(id):Path<String>,
             let stems: Vec<String> = state.library.list_songs().map(|songs| songs.into_iter().filter(|song| derived_from(song) == Some((id.as_str(), "stems"))).map(|song| song.id).collect()).unwrap_or_default();
             for song_id in std::iter::once(id.clone()).chain(stems) {
                 if let Err(error) = pin_placeholder(&state, &song_id).await {
-                    eprintln!("[ERROR] could not draw the unique pattern of {song_id} again: {error:#}");
+                    studio_log!("[ERROR] could not draw the unique pattern of {song_id} again: {error:#}");
                 }
             }
         });
@@ -4158,7 +4258,7 @@ async fn delete_library_song(State(state): State<AppState>, Path(id): Path<Strin
     if let Some(song) = song {
         for path in song_files(&state, &song) {
             if let Err(error) = std::fs::remove_file(&path) {
-                eprintln!("[ERROR] delete song {id}: could not remove {}: {error}", path.display());
+                studio_log!("[ERROR] delete song {id}: could not remove {}: {error}", path.display());
                 left.push(format!("{}: {error}", plain_path(&path)));
             }
         }
@@ -4310,7 +4410,7 @@ async fn update_configuration(
                         Some("whisper") => lyrics_sync::AsrProvider::Whisper,
                         Some("parakeet") => lyrics_sync::AsrProvider::Parakeet,
                         _ if installed_parakeet.is_some() => lyrics_sync::AsrProvider::Parakeet,
-                        _ if state.lyrics_sync.whisper_binary().is_some() => lyrics_sync::AsrProvider::Whisper,
+                        _ if state.lyrics_sync.crisper_ready(sync.runtime) => lyrics_sync::AsrProvider::Whisper,
                         _ => sync.provider,
                     },
                 };
@@ -4434,8 +4534,10 @@ async fn update_engine_options(
 /// Makes the engine find every model and LoRA on disk again. It reads its
 /// folders once, when it starts, so a file that arrived later - a download, a
 /// file put there by hand - is found by restarting it. New songs wait for it,
-/// and the songs already on the engine are finished first: the engine keeps no
-/// list of its work, so each one the studio sent it is asked after.
+/// and the songs already on the engine are finished first: a restart empties the
+/// engine's job table, its queue and the results not yet fetched, so it waits
+/// until the studio has taken every song it sent, not only until the engine
+/// stops rendering.
 async fn rescan_resources(state: &AppState) -> Result<Value, String> {
     let _rescan = state.engine_use.write().await;
     // a training run or a dataset preparation holds the card; the engine finds
@@ -4445,23 +4547,15 @@ async fn rescan_resources(state: &AppState) -> Result<Value, String> {
         return Ok(serde_json::json!({ "restarted": false, "message": "The engine is not running; it finds every model and LoRA when it starts." }));
     }
     loop {
-        let sent: Vec<String> = state
+        let in_flight = state
             .jobs
             .read()
             .await
             .values()
-            .filter(|job| matches!(job.dispatch, MusicJobDispatch::Local) && matches!(job.status, MusicJobStatus::Queued | MusicJobStatus::Running))
-            .map(|job| job.id.clone())
-            .collect();
-        let mut rendering = false;
-        for id in &sent {
-            if state.music_server.job(id).await.is_ok_and(|remote| remote.status == "running") {
-                rendering = true;
-                break;
-            }
-        }
-        // an engine that stopped answering has nothing left to finish
-        if !rendering || !state.music_server.health().await {
+            .any(|job| matches!(job.dispatch, MusicJobDispatch::Local) && matches!(job.status, MusicJobStatus::Queued | MusicJobStatus::Running));
+        // an engine that is gone has nothing left to finish; one inside a long step answers late but is still at work
+        let alive = state.music_server.health().await || state.engine.lock().await.as_mut().is_some_and(|engine| engine.process_alive());
+        if !in_flight || !alive {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -4514,6 +4608,10 @@ async fn restart_engine(state: &AppState) -> Result<(), String> {
     let mut supervisor = state.engine.lock().await;
     let owned = supervisor.is_some();
     if let Some(engine) = supervisor.as_mut() {
+        // the one moment its exit code can still be read: a new supervisor starts with no child
+        if let Some(exit) = engine.exit_status() {
+            music_engine::mm_server::note_in_log(&format!("the previous engine had already exited: {exit}"));
+        }
         tokio::task::block_in_place(|| engine.stop(std::time::Duration::from_secs(10)))
             .map_err(|error| format!("stopping the local engine failed: {error}"))?;
     }
@@ -4549,6 +4647,21 @@ async fn restart_engine(state: &AppState) -> Result<(), String> {
     if options.backend == music_engine::mm_server::ComputeBackend::Cuda && cuda_build::current().is_none() {
         return Err(cuda_build::UNSUPPORTED.into());
     }
+    // nvidia-smi is a process of its own: asked off the async workers, and only for a chosen card
+    let chosen_card = options.gpu;
+    let missing = match chosen_card {
+        None => None,
+        Some(_) => tokio::task::spawn_blocking(move || missing_chosen_card(chosen_card, &cuda_build::nvidia_cards()))
+            .await
+            .unwrap_or_else(|error| Some(format!("the graphics card chosen in Settings - Local engine was not looked for: {error}"))),
+    };
+    if let Some(problem) = missing {
+        // the supervisor asks again every few seconds: the log gets the reason once
+        if music_engine::mm_server::startup_log_tail(1).last() != Some(&format!("[studio] {problem}")) {
+            music_engine::mm_server::note_in_log(&problem);
+        }
+        return Err(problem);
+    }
     let chain = options.device_chain(&state.failed_devices.read().await);
     let mut last_error = String::new();
     for (index, device) in chain.iter().copied().enumerate() {
@@ -4562,9 +4675,12 @@ async fn restart_engine(state: &AppState) -> Result<(), String> {
                     .map_err(|error| format!("the engine's CUDA libraries could not be downloaded: {error}"))?;
             }
             Some(_) => {}
-            None => engine_runtime::ensure_vc_runtime()
-                .await
-                .map_err(|error| format!("the Visual C++ runtime could not be installed: {error}"))?,
+            None => {
+                let absent = state.engine_runtime.vc_runtime_missing();
+                if !absent.is_empty() {
+                    return Err(format!("the engine bundle is incomplete: {} missing beside the engine; reinstall the studio", absent.join(", ")));
+                }
+            }
         }
         // The engine loads eleven gigabytes of weights the moment it starts.
         // If the writing assistant is still holding the card, it does not finish.
@@ -4583,19 +4699,31 @@ async fn restart_engine(state: &AppState) -> Result<(), String> {
                 return Ok(());
             }
             Err(error) => {
-                last_error = format!("the local engine did not start: {error}");
+                let run = last_run_log();
+                // why a CUDA backend that loaded has no device: an old driver, mostly
+                let cuda = run.lines().find_map(|line| line.split_once("failed to initialize CUDA: ").map(|(_, why)| format!(" CUDA said: {}.", why.trim())));
+                last_error = match absent_device(&run) {
+                    Some((name, available)) => format!(
+                        "The engine has no device {name} on this computer; it sees {available}.{} Choose Auto in Settings, Local engine, or one of those devices.",
+                        cuda.unwrap_or_default()
+                    ),
+                    None => format!("the local engine did not start: {error}"),
+                };
                 // Only Auto moves on, and never past a card that ran out of
                 // memory: Vulkan has no more of it, and the reason is shown.
                 let next = chain.get(index + 1).copied();
-                let out_of_memory = describes_exhausted_memory(&last_run_log().to_lowercase());
+                let (moves_on, leaves_the_device) = after_a_failed_start(&run.to_lowercase());
                 match next {
-                    Some(next) if options.backend == music_engine::mm_server::ComputeBackend::Auto && !out_of_memory => {
+                    Some(next) if options.backend == music_engine::mm_server::ComputeBackend::Auto && moves_on => {
                         music_engine::mm_server::note_in_log(&format!(
                             "{} did not start ({error}); trying {}",
                             device_name(device),
                             device_name(next)
                         ));
-                        state.failed_devices.write().await.push(device);
+                        if leaves_the_device {
+                            music_engine::mm_server::note_in_log(&format!("{} failed on this machine; leaving it for this session", device_name(device)));
+                            state.failed_devices.write().await.push(device);
+                        }
                     }
                     _ => return Err(last_error),
                 }
@@ -4616,6 +4744,23 @@ fn device_name(device: music_engine::mm_server::ComputeBackend) -> &'static str 
     }
 }
 
+/// Why the engine cannot start on the card the settings name: a card that is not in this computer would leave CUDA
+/// with no device at all, and the engine would go to the processor without a word.
+fn missing_chosen_card(chosen: Option<u32>, cards: &[(u32, String, f64)]) -> Option<String> {
+    let index = chosen?;
+    if cards.iter().any(|(number, ..)| *number == index) {
+        return None;
+    }
+    let present = if cards.is_empty() {
+        "nvidia-smi lists no NVIDIA card".to_string()
+    } else {
+        format!("nvidia-smi lists {}", cards.iter().map(|(number, name, _)| format!("{number}: {name}")).collect::<Vec<_>>().join(", "))
+    };
+    Some(format!(
+        "the graphics card chosen in Settings - Local engine (number {index}) is not in this computer ({present}); choose another card or Auto there"
+    ))
+}
+
 /// The engine log since the last start, where the reason a run ended is.
 fn last_run_log() -> String {
     let tail = music_engine::mm_server::startup_log_tail(400);
@@ -4623,34 +4768,66 @@ fn last_run_log() -> String {
     tail[start..].join("\n")
 }
 
-/// The engine log of the run before the current one: after a restart, the
-/// run that ended is where the reason is.
+/// The device the engine was told to use and did not find, with the devices
+/// it lists instead: `--device CUDA0 not found. Available: Vulkan0 CPU`.
+fn absent_device(log: &str) -> Option<(String, String)> {
+    log.lines().rev().find_map(|line| {
+        let (_, rest) = line.split_once("--device ")?;
+        let (name, available) = rest.split_once(" not found. Available:")?;
+        Some((name.trim().to_string(), available.trim().replace(' ', ", ")))
+    })
+}
+
 fn previous_run_log() -> String {
-    let tail = music_engine::mm_server::startup_log_tail(600);
+    previous_run(&music_engine::mm_server::startup_log_tail(4000))
+}
+
+/// The lines before the current run's start: a long run writes hundreds of
+/// lines, so the tail may have lost where that run began, never where the
+/// current one did.
+fn previous_run(tail: &[String]) -> String {
     let starts: Vec<usize> = tail.iter().enumerate().filter(|(_, line)| line.contains("---- starting")).map(|(index, _)| index).collect();
     match starts.as_slice() {
         [.., before, last] => tail[*before..*last].join("\n"),
-        _ => tail.join("\n"),
+        [last] => tail[..*last].join("\n"),
+        [] => tail.join("\n"),
     }
 }
 
 /// Why a song was lost with an engine that restarted during it, from the log
 /// of the run that ended.
-fn lost_job_reason(log: &str) -> String {
+fn lost_job_reason(log: &str) -> SongError {
     let lowered = log.to_lowercase();
-    if describes_exhausted_memory(&lowered) {
-        "The graphics card ran out of memory on this song and the engine restarted, so the song was lost. Choose a smaller model set in the model manager or a shorter song, and close whatever else uses the card; a card below the smallest set cannot make songs.".into()
+    if describes_exhausted_ram(&lowered) {
+        SongError::LostRam
+    } else if describes_exhausted_memory(&lowered) {
+        SongError::LostVram
     } else if describes_device_failure(&lowered) {
-        match device_error_line(log) {
-            Some(error) => format!("The graphics card failed during this song ({error}) and the engine restarted, so the song was lost. The engine log is in Settings, Engine."),
-            None => "The graphics card failed during this song (a CUDA or driver error) and the engine restarted, so the song was lost. The engine log is in Settings, Engine.".into(),
+        // the card, its compute capability, the driver and the build: what tells a missing architecture
+        // from a driver too old for the build
+        let card = if lowered.contains("cuda error") { cuda_build::describe() } else { None };
+        match (device_error_line(log), card) {
+            (Some(detail), Some(card)) => SongError::LostDeviceOnCard {
+                detail,
+                card: card.name,
+                compute: card.compute,
+                driver: card.driver,
+                build: card.build.to_string(),
+            },
+            (detail, _) => SongError::LostDevice(detail),
         }
+    } else if let Some((exit, meaning)) = engine_exit(log) {
+        SongError::LostExit { exit, meaning, line: last_engine_line(log) }
     } else {
-        match last_engine_line(log) {
-            Some(line) => format!("The engine stopped during this song and restarted, so the song was lost; its last line was {line}. The engine log is in Settings, Engine."),
-            None => "The engine stopped during this song and restarted, so the song was lost. The engine log is in Settings, Engine.".into(),
-        }
+        last_engine_line(log).map_or(SongError::Lost, SongError::LostAtLine)
     }
+}
+
+/// The exit code of the engine that ended, as the studio noted it at the restart, and what a Windows one means.
+fn engine_exit(log: &str) -> Option<(String, Option<&'static str>)> {
+    let line = log.lines().rev().find(|line| line.contains("had already exited:"))?;
+    let code = line.rsplit_once("(0x")?.1.trim_end_matches(')').to_lowercase();
+    Some((format!("0x{code}"), song_errors::exit_meaning(&code)))
 }
 
 /// The last thing the engine wrote before it went: a process the driver ends says nothing, and the stage it was
@@ -4676,11 +4853,21 @@ fn device_error_line(log: &str) -> Option<String> {
 }
 
 
+/// What Auto does after a device did not start, from the lowercased log of
+/// that start: whether it tries the next device, and whether it leaves this
+/// one for the rest of the session. Only a failure the log names as the
+/// device's leaves it: a slow start or an exit without a reason is tried
+/// again at the next start.
+fn after_a_failed_start(log: &str) -> (bool, bool) {
+    let out_of_memory = describes_exhausted_memory(log) || describes_exhausted_ram(log);
+    (!out_of_memory, describes_device_failure(log))
+}
+
 /// Whether a lowercased engine log says the compute device itself failed -
 /// a CUDA or Vulkan error, a device lost, the engine's self-test - as opposed
 /// to running out of memory, which another device would not cure.
 fn describes_device_failure(log: &str) -> bool {
-    if describes_exhausted_memory(log) {
+    if describes_exhausted_memory(log) || describes_exhausted_ram(log) {
         return false;
     }
     [
@@ -4721,6 +4908,28 @@ fn engine_bundle_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("resources/minimaxmusic-cpp"))
 }
 
+/// `folder` first on a PATH, once: a folder already on it moves to the front.
+fn path_with_first(folder: &std::path::Path, existing: &std::ffi::OsStr) -> Option<std::ffi::OsString> {
+    let rest = env::split_paths(existing).filter(|entry| entry != folder);
+    env::join_paths(std::iter::once(folder.to_path_buf()).chain(rest)).ok()
+}
+
+/// The engine's folder goes first on this process's PATH at start. The Visual
+/// C++ runtime ships there, and every program the studio runs - the engine,
+/// llama-server, the HOT-Step tools, BSRoformer, Whisper - and ONNX Runtime
+/// inside it find it through the PATH they inherit.
+fn put_the_engine_folder_on_path() {
+    #[cfg(windows)]
+    {
+        let folder = engine_bundle_root();
+        let existing = env::var_os("PATH").unwrap_or_default();
+        match path_with_first(&folder, &existing) {
+            Some(path) => unsafe { env::set_var("PATH", path) },
+            None => studio_log!("[ERROR] {} cannot go on PATH; the Visual C++ runtime beside the engine is not found through it", folder.display()),
+        }
+    }
+}
+
 fn engine_location(options: EngineOptions) -> music_engine::mm_server::MmServerLocation {
     // The environment still wins, so a developer build needs no settings: a
     // saved path is what is left when nothing is pinned from outside.
@@ -4744,7 +4953,7 @@ fn engine_location(options: EngineOptions) -> music_engine::mm_server::MmServerL
         adapters_root: studio_data_root().map(|root| root.join("adapters")).filter(|folder| match std::fs::create_dir_all(folder) {
             Ok(()) => true,
             Err(error) => {
-                eprintln!("[ERROR] the adapter folder {} cannot be created, the engine starts without adapters: {error}", folder.display());
+                studio_log!("[ERROR] the adapter folder {} cannot be created, the engine starts without adapters: {error}", folder.display());
                 false
             }
         }),
@@ -5141,7 +5350,7 @@ fn start_hub() -> Option<studio_hub_client::Hub> {
             Some(hub)
         }
         Err(error) => {
-            eprintln!("[ERROR] Studio Hub is off for this run, its state file cannot be read: {error}");
+            studio_log!("[ERROR] Studio Hub is off for this run, its state file cannot be read: {error}");
             None
         }
     }
@@ -5264,6 +5473,18 @@ async fn compose_setup_status(state: &AppState, manager_status: model_manager::M
             Value::Bool(state.music_server.health().await),
         );
         fields.insert("engine_id".into(), Value::String(PRIMARY_MUSIC_ENGINE_ID.into()));
+        // whether the files a person downloads by hand are better taken from the mirror, as the studio's are
+        fields.insert("huggingface_mirror".into(), Value::Bool(net::current().huggingface_mirror));
+        // what the running engine computes on, so a run on the processor is seen in the window
+        fields.insert("engine_device".into(), serde_json::to_value(*state.active_device.read().await).unwrap_or(Value::Null));
+        let chosen_card = state.engine_options.read().await.gpu;
+        let problem = match chosen_card {
+            Some(_) => tokio::task::spawn_blocking(move || missing_chosen_card(chosen_card, &cuda_build::nvidia_cards()))
+            .await
+            .unwrap_or_else(|error| Some(format!("the graphics card chosen in Settings - Local engine was not looked for: {error}"))),
+            None => None,
+        };
+        fields.insert("engine_problem".into(), serde_json::to_value(problem).unwrap_or(Value::Null));
         fields.insert("selected_profile_id".into(), serde_json::to_value(selected_profile_id).unwrap_or(Value::Null));
         fields.insert("selected_component_ids".into(), serde_json::to_value(selected_component_ids).unwrap_or(Value::Null));
         fields.insert("hardware".into(), serde_json::to_value(presets::hardware()).unwrap_or(Value::Null));
@@ -5291,7 +5512,7 @@ async fn compose_setup_status(state: &AppState, manager_status: model_manager::M
             serde_json::json!({
                 "ready": match runtime_build {
                     Some(build) => state.engine_runtime.is_ready(build),
-                    None => engine_runtime::vc_runtime_present(),
+                    None => state.engine_runtime.vc_runtime_missing().is_empty(),
                 },
                 "downloading": runtime_active.is_some(),
                 "downloaded_bytes": runtime_active.as_ref().map(|progress| progress.downloaded_bytes).unwrap_or(0),
@@ -5443,7 +5664,7 @@ async fn assistant_ready(config: AssistantConfig, runtime: assistant_runtime::Ru
         return assistant_available(&config, &runtime);
     }
     tokio::task::spawn_blocking(move || assistant_available(&config, &runtime)).await.unwrap_or_else(|error| {
-        eprintln!("[ERROR] detecting the agent CLIs stopped: {error}");
+        studio_log!("[ERROR] detecting the agent CLIs stopped: {error}");
         false
     })
 }
@@ -5668,6 +5889,8 @@ async fn assistant_runtime_status(State(state): State<AppState>) -> Json<Value> 
         // And which model, so the dropdown reopens on the one that was picked
         // rather than on whichever happens to be installed first.
         fields.insert("chosen_model".into(), serde_json::to_value(&config.managed_model).unwrap_or(Value::Null));
+        // why the card runs the Vulkan build of llama.cpp and not its CUDA one, for the window to say in its language
+        fields.insert("llama_note".into(), assistant_runtime::llama_note().unwrap_or(Value::Null));
         // the panel's "installed" is about the chosen provider: OpenRouter or a server of the user's downloads nothing;
         // switched off, it is about the files
         if config.provider != AssistantProvider::None {
@@ -5724,7 +5947,7 @@ async fn assistant_runtime_install(
             .collect();
         tokio::spawn(async move {
             if let Err(error) = runtime.install_all(&ids).await {
-                eprintln!("the assistant could not be installed: {error}");
+                studio_log!("the assistant could not be installed: {error}");
             }
         });
         return Ok(Json(state.assistant_runtime.status().await));
@@ -5818,9 +6041,8 @@ async fn karaoke_status(State(state): State<AppState>) -> Json<Value> {
 fn karaoke_variant_bytes(id: &str) -> Option<u64> {
     let files: Vec<&'static lyrics_sync::Asset> = if [lyrics_sync::PARAKEET_V3, lyrics_sync::PARAKEET_ULTRA].contains(&id) {
         lyrics_sync::asset(id).into_iter().collect()
-    } else if let Some(size) = id.strip_prefix("whisper-").filter(|_| lyrics_sync::asset(id).is_some_and(|asset| asset.vram_gb.is_some())) {
-        let prefix = format!("models/whisper/faster-whisper-{size}/");
-        lyrics_sync::ASSETS.iter().filter(|asset| asset.relative_path.starts_with(&prefix)).collect()
+    } else if id == lyrics_sync::CRISPERWHISPER_MODEL {
+        lyrics_sync::ASSETS.iter().filter(|asset| asset.relative_path.starts_with("models/crisperwhisper2-turbo/")).collect()
     } else {
         return None;
     };
@@ -5882,13 +6104,18 @@ async fn karaoke_remove(
     Ok(Json(state.lyrics_sync.status(&config).await))
 }
 
-/// Frees the disk the stem separation model takes.
-async fn remove_separation_model(State(state): State<AppState>) -> Result<Json<Value>, (StatusCode, Json<ApiError>)> {
-    let freed = state
-        .separator
-        .downloader()
-        .remove(&separation::MODEL)
-        .map_err(|error| api_error(StatusCode::CONFLICT, error.to_string()))?;
+async fn remove_separation_model(State(state): State<AppState>, request: Option<Json<InstallSeparationAssetRequest>>) -> Result<Json<Value>, (StatusCode, Json<ApiError>)> {
+    let roformer = request.is_some_and(|Json(request)| request.asset_id == "roformer");
+    let downloader = state.separator.downloader();
+    let freed = if roformer {
+        let mut freed = downloader.remove(&separation::ROFORMER_MODEL).map_err(|error| api_error(StatusCode::CONFLICT, error.to_string()))?;
+        for engine in [true, false].into_iter().filter_map(separation::Separator::roformer_engine) {
+            freed += downloader.remove(engine).map_err(|error| api_error(StatusCode::CONFLICT, error.to_string()))?;
+        }
+        freed
+    } else {
+        downloader.remove(&separation::MODEL).map_err(|error| api_error(StatusCode::CONFLICT, error.to_string()))?
+    };
     Ok(Json(serde_json::json!({ "freed_bytes": freed })))
 }
 
@@ -5911,28 +6138,7 @@ fn karaoke_set(name: &str, device: lyrics_sync::OnnxFlavour, whisper_model: Opti
             }
             wanted.extend(lyrics_sync::parakeet_assets(device, whisper_model).into_iter().map(String::from));
         }
-        "whisper" => {
-            // One binary whichever device is chosen; the card needs CUDA 11's
-            // libraries beside it, and without them CTranslate2 silently uses
-            // the processor instead of saying so.
-            wanted.push("whisper-engine".into());
-            if device.uses_cuda() {
-                wanted.push("whisper-cublas".into());
-                wanted.push("whisper-cudnn".into());
-            }
-            // A model is a directory of files, and it is useless one file
-            // short, so the whole set goes together.
-            let chosen = whisper_model.unwrap_or("whisper-large-v3-turbo");
-            if let Some(size) = chosen.strip_prefix("whisper-") {
-                let prefix = format!("models/whisper/faster-whisper-{size}/");
-                wanted.extend(
-                    lyrics_sync::ASSETS
-                        .iter()
-                        .filter(|asset| asset.relative_path.starts_with(&prefix))
-                        .map(|asset| asset.id.to_string()),
-                );
-            }
-        }
+        "whisper" => wanted.extend(lyrics_sync::crisper_assets(device).into_iter().map(String::from)),
         _ => {}
     }
     wanted.iter().filter_map(|id| lyrics_sync::asset(id)).collect()
@@ -5954,7 +6160,7 @@ async fn karaoke_install(
         let sync = state.lyrics_sync.clone();
         tokio::spawn(async move {
             if let Err(error) = sync.downloader().install_all("karaoke", &set).await {
-                eprintln!("the karaoke recogniser could not be installed: {error}");
+                studio_log!("the karaoke recogniser could not be installed: {error}");
             }
         });
         return Ok(Json(state.lyrics_sync.status(&config).await));
@@ -6024,8 +6230,7 @@ async fn create_song_karaoke(
             let config = config.clone();
             let path = std::path::PathBuf::from(&audio);
             let language = request.language.clone();
-            let lyrics = song.lyrics.clone();
-            tokio::task::spawn_blocking(move || sync.whisper_words(&config, &path, language.as_deref(), &lyrics))
+            tokio::task::spawn_blocking(move || sync.crisper_words(config.runtime, &path, language.as_deref()))
                 .await
                 .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
         }
@@ -6790,7 +6995,7 @@ async fn install_midi(State(state): State<AppState>, Json(input): Json<MidiSizeR
         match transcriber.downloader().install_all("midi", &missing).await {
             Ok(_) if transcriber.tool_installed() => transcriber.remove_older_tools(),
             Ok(_) => {}
-            Err(error) => eprintln!("[ERROR] midi: download failed: {error:#}"),
+            Err(error) => studio_log!("[ERROR] midi: download failed: {error:#}"),
         }
     });
     Ok(Json(serde_json::json!({ "started": true, "size": size.id })))
@@ -7018,6 +7223,7 @@ async fn transcribe_to_midi(state: &AppState, size: &'static midi::Size, audio: 
     if let Some(path) = music_core::process::own_libraries_first(&tool) {
         command.env("LD_LIBRARY_PATH", path);
     }
+    dub_core::proc::outside_appimage(command.as_std_mut());
     command
         .arg("--device")
         .arg(device)
@@ -7401,6 +7607,31 @@ fn adoptable_sources(components: &[model_manager::Component], root: &std::path::
         .collect()
 }
 
+/// The model files in `entries` the studio did not take, and why: one with a
+/// catalogue name but another size is another build of that file, and a GGUF
+/// the catalogue does not name is no part of the studio's sets. Files already
+/// installed and the ones taken are left out.
+fn adopt_refusals(components: &[model_manager::Component], root: &std::path::Path, entries: &[std::path::PathBuf], taken: &[std::path::PathBuf]) -> Vec<Value> {
+    entries
+        .iter()
+        .filter(|path| !taken.contains(path))
+        .filter(|path| path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("gguf")))
+        .filter_map(|path| {
+            let name = path.file_name()?.to_string_lossy().into_owned();
+            let size = std::fs::metadata(path).ok()?.len();
+            match components.iter().find(|component| component.filename == name) {
+                Some(component) => {
+                    let installed = std::fs::metadata(root.join(component.filename)).is_ok_and(|meta| meta.len() == component.bytes);
+                    (!installed && size != component.bytes).then(|| {
+                        serde_json::json!({ "file": name, "kind": "size", "size": size, "needs": component.bytes, "repository": component.repository, "revision": component.revision })
+                    })
+                }
+                None => Some(serde_json::json!({ "file": name, "kind": "unknown", "size": size })),
+            }
+        })
+        .collect()
+}
+
 /// Takes models the user already has instead of downloading them again.
 ///
 /// Anyone who has run Music3 through ComfyUI or another build already has these
@@ -7439,15 +7670,23 @@ async fn setup_adopt(State(state): State<AppState>, body: axum::body::Bytes) -> 
 
     let components = catalog.components.clone();
     let root = models_root.clone();
-    let found = tokio::task::spawn_blocking(move || adoptable_sources(&components, &root, &entries))
-        .await
-        .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+    let (found, mut refused) = tokio::task::spawn_blocking(move || {
+        let found = adoptable_sources(&components, &root, &entries);
+        let taken: Vec<std::path::PathBuf> = found.iter().map(|(_, source)| source.clone()).collect();
+        let refused = adopt_refusals(&components, &root, &entries, &taken);
+        (found, refused)
+    })
+    .await
+    .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
     for (component, source) in &found {
         let target = models_root.join(component.filename);
         // A hard link costs nothing and keeps one copy on disk; a folder on
         // another drive cannot have one, so that falls back to a copy.
-        if std::fs::hard_link(source, &target).is_err() && std::fs::copy(source, &target).is_err() {
-            continue;
+        if std::fs::hard_link(source, &target).is_err() {
+            if let Err(error) = std::fs::copy(source, &target) {
+                refused.push(serde_json::json!({ "file": component.filename, "kind": "copy", "error": error.to_string() }));
+                continue;
+            }
         }
         adopted.push(component.id.to_string());
     }
@@ -7458,6 +7697,7 @@ async fn setup_adopt(State(state): State<AppState>, body: axum::body::Bytes) -> 
         "picked": true,
         "folder": folder.display().to_string(),
         "adopted": adopted,
+        "refused": refused,
         "status": compose_setup_status(&state, status).await,
     })))
 }
@@ -7472,17 +7712,29 @@ async fn open_data_directory() -> Result<Json<Value>, (StatusCode, Json<ApiError
     };
     let _ = std::fs::create_dir_all(&root);
     #[cfg(windows)]
-    let opened = std::process::Command::new("explorer.exe").arg(&root).spawn();
+    let opened = music_engine::process_group::detach_from_group(&mut std::process::Command::new("explorer.exe")).arg(&root).spawn();
     #[cfg(target_os = "macos")]
     let opened = std::process::Command::new("open").arg(&root).spawn();
     #[cfg(all(not(windows), not(target_os = "macos")))]
-    let opened = std::process::Command::new("xdg-open").arg(&root).spawn();
+    let opened = music_engine::process_group::detach_from_group(&mut dub_core::proc::host_command("xdg-open")).arg(&root).spawn();
     opened.map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
     Ok(Json(serde_json::json!({ "opened": root.display().to_string() })))
 }
 
-async fn setup_catalog(State(state): State<AppState>) -> Json<model_manager::Catalog> {
-    Json(state.model_manager.catalog())
+async fn setup_catalog(State(state): State<AppState>) -> Json<Value> {
+    let catalog = state.model_manager.catalog();
+    // each file at its pinned revision, on Hugging Face and on the mirror, for a download by hand
+    let sources: Vec<(String, String)> = catalog.components.iter().map(|component| (component.url(), net::mirror_url(&component.url()))).collect();
+    let mut value = serde_json::to_value(catalog).unwrap_or_else(|_| serde_json::json!({}));
+    if let Some(components) = value.get_mut("components").and_then(Value::as_array_mut) {
+        for (component, (url, mirror_url)) in components.iter_mut().zip(sources) {
+            if let Value::Object(fields) = component {
+                fields.insert("url".into(), Value::String(url));
+                fields.insert("mirror_url".into(), Value::String(mirror_url));
+            }
+        }
+    }
+    Json(value)
 }
 
 async fn setup_download(
@@ -7570,10 +7822,219 @@ async fn setup_cancel(State(state): State<AppState>) -> Result<Json<Value>, (Sta
     Ok(Json(compose_setup_status(&state, manager_status).await))
 }
 
+/// The downloads of a part of the studio the update screen compares with the disk, its downloader's own catalogue
+/// (the assistant keeps its own kind of asset and is read apart).
+fn update_catalogue(part: update_screen::Part) -> Vec<&'static downloads::Asset> {
+    use update_screen::Part;
+    let mut assets: Vec<&'static downloads::Asset> = match part {
+        Part::Engine => engine_runtime::ASSETS.iter().collect(),
+        Part::Karaoke => lyrics_sync::ASSETS.iter().collect(),
+        Part::Separation => std::iter::once(&separation::MODEL).chain(roformer_set(true)).chain(roformer_set(false)).collect(),
+        Part::Midi => vec![midi::tool_asset()],
+        Part::Training => training::pack().iter().collect(),
+        Part::Listening => training::listen_pack().iter().collect(),
+        Part::Assistant => Vec::new(),
+    };
+    let mut seen = std::collections::HashSet::new();
+    assets.retain(|asset| seen.insert(asset.id));
+    assets
+}
+
+/// The downloader of a part and the scope its panel follows; the assistant downloads through its own runtime.
+fn update_downloader(state: &AppState, part: update_screen::Part) -> Option<(&downloads::Downloader, &'static str)> {
+    use update_screen::Part;
+    match part {
+        Part::Engine => Some((state.engine_runtime.downloader(), "engine")),
+        Part::Karaoke => Some((state.lyrics_sync.downloader(), "karaoke")),
+        Part::Separation => Some((state.separator.downloader(), "separation")),
+        Part::Midi => Some((state.midi.downloader(), "midi")),
+        Part::Training => Some((state.training.downloader(), training::SCOPE)),
+        Part::Listening => Some((state.training.downloader(), training::LISTEN_SCOPE)),
+        Part::Assistant => None,
+    }
+}
+
+/// Karaoke heard with Faster-Whisper before: CrisperWhisper takes its place, and Faster-Whisper's files wait for it.
+fn karaoke_on_whisper(karaoke: &lyrics_sync::LyricsSyncConfig) -> bool {
+    karaoke.enabled && karaoke.provider == lyrics_sync::AsrProvider::Whisper
+}
+
+/// The data folder, where the update screen notes the release it has shown: the settings file's folder.
+fn update_data_root(state: &AppState) -> &std::path::Path {
+    state.settings_path.parent().expect("the settings file lies in the data folder")
+}
+
+/// This release's plan against the disk; it reads files and changes none.
+fn update_plan_now(state: &AppState, karaoke: &lyrics_sync::LyricsSyncConfig) -> update_screen::Plan {
+    use update_screen::{Candidate, Part};
+    let of = |part: Part, asset: &'static downloads::Asset, downloader: &downloads::Downloader, earlier: Option<String>| Candidate {
+        part,
+        id: asset.id,
+        label: asset.label,
+        model: asset.kind == downloads::AssetKind::Model,
+        relative_path: asset.relative_path,
+        url: asset.url,
+        bytes: asset.bytes,
+        downloaded: downloader.partial_bytes(asset),
+        earlier,
+    };
+    let mut updated = Vec::new();
+    for part in [Part::Engine, Part::Karaoke, Part::Separation, Part::Midi, Part::Training, Part::Listening] {
+        let Some((downloader, _)) = update_downloader(state, part) else { continue };
+        for asset in update_catalogue(part) {
+            if let Some(earlier) = downloader.earlier(asset) {
+                updated.push(of(part, asset, downloader, earlier));
+            }
+        }
+    }
+    let assistant = &state.assistant_runtime;
+    for asset in assistant_runtime::ASSETS {
+        if let Some(earlier) = assistant.earlier(asset) {
+            updated.push(Candidate {
+                part: Part::Assistant,
+                id: asset.id,
+                label: asset.label,
+                model: asset.kind == assistant_runtime::AssetKind::Model,
+                relative_path: asset.relative_path,
+                url: asset.url,
+                bytes: asset.bytes,
+                downloaded: assistant.partial_bytes(asset),
+                earlier,
+            });
+        }
+    }
+    let leftovers = state.lyrics_sync.leftovers();
+    let whisper_left = leftovers.iter().any(|leftover| leftover.what == "faster-whisper" && !leftover.paths.is_empty());
+    let mut added = Vec::new();
+    if whisper_left && karaoke_on_whisper(karaoke) {
+        let downloader = state.lyrics_sync.downloader();
+        for asset in lyrics_sync::crisper_assets(karaoke.runtime).into_iter().filter_map(lyrics_sync::asset) {
+            if !downloader.is_installed(asset) && !updated.iter().any(|row: &Candidate| row.id == asset.id) {
+                added.push(of(Part::Karaoke, asset, downloader, None));
+            }
+        }
+    }
+    update_screen::plan(updated, added, leftovers, update_data_root(state), studio_version())
+}
+
+async fn update_plan(state: &AppState) -> Result<update_screen::Plan, (StatusCode, Json<ApiError>)> {
+    let karaoke = state.lyrics_sync_config.read().await.clone();
+    let state = state.clone();
+    tokio::task::spawn_blocking(move || update_plan_now(&state, &karaoke))
+        .await
+        .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("the update plan was not read: {error}")))
+}
+
+/// The update screen's download with what of it has arrived: a row's bytes once installed, its partial files until.
+async fn update_job_now(state: &AppState) -> Option<update_screen::Job> {
+    let mut job = state.update_job.read().await.clone()?;
+    for row in job.rows_mut() {
+        let arrived: u64 = match update_downloader(state, row.part) {
+            Some((downloader, _)) => update_catalogue(row.part)
+                .into_iter()
+                .filter(|asset| row.ids.contains(&asset.id))
+                .map(|asset| if downloader.is_installed(asset) { asset.bytes } else { downloader.partial_bytes(asset) })
+                .sum(),
+            None => row
+                .ids
+                .iter()
+                .filter_map(|id| assistant_runtime::asset(id))
+                .map(|asset| if state.assistant_runtime.is_installed(asset) { asset.bytes } else { state.assistant_runtime.partial_bytes(asset) })
+                .sum(),
+        };
+        row.download = row.bytes.saturating_sub(arrived);
+    }
+    Some(job)
+}
+
+/// GET /setup/update - the update screen: this release's plan (updated, added, retired with their reasons, the
+/// totals, and whether the window shows the screen at start) and the screen's download while it runs and after.
+async fn setup_update(State(state): State<AppState>) -> Result<Json<Value>, (StatusCode, Json<ApiError>)> {
+    let plan = update_plan(&state).await?;
+    Ok(Json(serde_json::json!({ "plan": plan, "job": update_job_now(&state).await })))
+}
+
+/// POST /setup/update/apply - the update screen's button: downloads what the plan updates and adds, part by part
+/// in the background, and once all of it is in place removes what former releases left; with nothing to download it
+/// removes them at once. The plan counts as shown.
+async fn setup_update_apply(State(state): State<AppState>) -> Result<Json<Value>, (StatusCode, Json<ApiError>)> {
+    // the check and the claim under one lock, so a second press or an agent cannot start a second update
+    let earlier = {
+        let mut job = state.update_job.write().await;
+        if job.as_ref().is_some_and(|job| job.status == update_screen::JobStatus::Running) {
+            return Err(api_error(StatusCode::CONFLICT, "the update is already running".into()));
+        }
+        job.replace(update_screen::Job { status: update_screen::JobStatus::Running, error: None, updated: Vec::new(), added: Vec::new() })
+    };
+    let plan = match update_plan(&state).await {
+        Ok(plan) => plan,
+        Err(error) => {
+            *state.update_job.write().await = earlier;
+            return Err(error);
+        }
+    };
+    if let Err(error) = update_screen::mark_seen(update_data_root(&state), studio_version()) {
+        studio_log!("[ERROR] {error}");
+    }
+    let rows: Vec<update_screen::Row> = plan.updated.iter().chain(&plan.added).cloned().collect();
+    *state.update_job.write().await =
+        Some(update_screen::Job { status: update_screen::JobStatus::Running, error: None, updated: plan.updated.clone(), added: plan.added.clone() });
+    let background = state.clone();
+    tokio::spawn(async move {
+        let outcome = run_update(&background, &rows).await;
+        if let Err(error) = &outcome {
+            studio_log!("[ERROR] the update did not finish: {error:#}");
+        }
+        if let Some(job) = background.update_job.write().await.as_mut() {
+            job.status = if outcome.is_ok() { update_screen::JobStatus::Done } else { update_screen::JobStatus::Failed };
+            job.error = outcome.err().map(|error| format!("{error:#}"));
+        }
+    });
+    let plan = update_plan(&state).await?;
+    Ok(Json(serde_json::json!({ "plan": plan, "job": update_job_now(&state).await })))
+}
+
+/// The downloads of `rows`, part after part, then the leftovers whose replacement is in place.
+async fn run_update(state: &AppState, rows: &[update_screen::Row]) -> anyhow::Result<()> {
+    let mut parts: Vec<update_screen::Part> = Vec::new();
+    for row in rows {
+        if !parts.contains(&row.part) {
+            parts.push(row.part);
+        }
+    }
+    for part in parts {
+        let ids: Vec<&str> = rows.iter().filter(|row| row.part == part).flat_map(|row| row.ids.iter().copied()).collect();
+        match update_downloader(state, part) {
+            Some((downloader, scope)) => {
+                let assets: Vec<&'static downloads::Asset> = update_catalogue(part).into_iter().filter(|asset| ids.contains(&asset.id)).collect();
+                downloader.install_all(scope, &assets).await?;
+            }
+            None => state.assistant_runtime.install_all(&ids.iter().map(|id| id.to_string()).collect::<Vec<_>>()).await?,
+        }
+    }
+    let karaoke = state.lyrics_sync_config.read().await.clone();
+    let sync = state.lyrics_sync.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut gone = vec!["parakeet-onnx"];
+        if !karaoke_on_whisper(&karaoke) || sync.crisper_ready(karaoke.runtime) {
+            gone.push("faster-whisper");
+        }
+        sync.remove_leftovers(&gone);
+    })
+    .await?;
+    Ok(())
+}
+
+/// POST /setup/update/seen - «Later»: this release's plan is not shown at start again; Settings - Models keeps it.
+async fn setup_update_seen(State(state): State<AppState>) -> Result<Json<Value>, (StatusCode, Json<ApiError>)> {
+    update_screen::mark_seen(update_data_root(&state), studio_version()).map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error))?;
+    Ok(Json(serde_json::json!({ "seen": studio_version() })))
+}
+
 async fn capabilities(State(state): State<AppState>) -> Json<CapabilitiesResponse> {
     let primary_installed = state.music_server.health().await;
     let parakeet_installed = state.lyrics_sync.parakeet_any_ready();
-    let whisper_installed = state.lyrics_sync.whisper_binary().is_some();
+    let whisper_installed = state.lyrics_sync.crisper_ready(state.lyrics_sync_config.read().await.runtime);
     let assistant = state.assistant.read().await.clone();
     let assistant_installed = assistant.available();
     let cli_agents = tokio::task::spawn_blocking(providers::cli_agent::detect).await.unwrap_or_default();
@@ -7629,7 +8090,7 @@ fn capability_engines_with(
         },
         EngineDescriptor {
             id: "whisper".into(),
-            display_name: "Whisper.cpp (local)".into(),
+            display_name: "CrisperWhisper 2.0 turbo (local)".into(),
             capabilities: vec![Capability::SpeechToText],
             execution_mode: ExecutionMode::Local,
             installed: whisper_installed,
@@ -7678,17 +8139,29 @@ async fn free_the_card_for_the_engine(state: &AppState) {
 /// A card that ran out of memory says so in the log and then the process is
 /// gone; the studio saw only a refused connection, and told the user to
 /// download models that were already on disk.
-fn engine_failure_reason() -> Option<String> {
+fn engine_failure_reason() -> Option<SongError> {
     let tail = music_engine::mm_server::startup_log_tail(80).join("\n").to_lowercase();
-    describes_exhausted_memory(&tail)
-        .then(|| "The graphics card ran out of memory while the engine was loading the models. Choose a smaller quantisation in the model manager, or close whatever else is using the card - the writing assistant holds several gigabytes of its own.".to_string())
+    if !describes_exhausted_memory(&tail) && !describes_exhausted_ram(&tail) {
+        return None;
+    }
+    // the device lines of the run's load may lie further back than the tail, past a long song's frames
+    let run = music_engine::mm_server::startup_log_tail(JOB_LOG_LINES).join("\n").to_lowercase();
+    let run_from_its_start = run.rfind("[studio] ---- starting").map_or(run.as_str(), |start| &run[start..]);
+    if describes_exhausted_ram(&tail) || ran_on_the_processor(run_from_its_start) {
+        return Some(SongError::LoadRam);
+    }
+    Some(SongError::LoadVram)
 }
 
 /// Why the engine gave this job up: running out of memory, else its own last
-/// FATAL line after the job's start.
-fn job_failure_reason(state: &AppState, job_id: &str) -> Option<String> {
-    engine_failure_reason().or_else(|| first_fatal(&state.engine_log.lines()?, job_id))
+/// FATAL line after the job's start. Looked for in the engine's log file, not the
+/// window's 512 lines: a long song's own lines push its start out of those.
+fn job_failure_reason(job_id: &str) -> Option<SongError> {
+    engine_failure_reason().or_else(|| first_fatal(&music_engine::mm_server::startup_log_tail(JOB_LOG_LINES), job_id).map(SongError::EngineFatal))
 }
+
+/// How far back in the engine's log a failed job's own start is looked for.
+const JOB_LOG_LINES: usize = 20_000;
 
 /// The first FATAL line after the job's own start, without the stage tag: the
 /// lines after it are its consequences.
@@ -7706,10 +8179,26 @@ fn describes_exhausted_memory(log: &str) -> bool {
         "failed to allocate",
         "insufficient memory",
         "cudaerrormemoryallocation",
-        "bad_alloc",
     ]
     .iter()
     .any(|marker| log.contains(marker))
+}
+
+/// Whether a lowercased log says the computer's own memory ran out: an
+/// allocation on the host failed, or memory ran out on an engine whose models
+/// sit on the processor, which a smaller set or fewer open programs cures, not
+/// another card.
+fn describes_exhausted_ram(log: &str) -> bool {
+    log.contains("bad_alloc") || describes_exhausted_memory(log) && ran_on_the_processor(log)
+}
+
+/// Whether the engine of this lowercased log put its models on the processor: its last `[Load] ... backend:` line
+/// names the CPU.
+fn ran_on_the_processor(log: &str) -> bool {
+    log.lines()
+        .rev()
+        .find_map(|line| line.trim_start().strip_prefix("[load] ").and_then(|rest| rest.split_once(" backend: ")).map(|(_, device)| device.to_string()))
+        .is_some_and(|device| device.starts_with("cpu"))
 }
 
 async fn create_music_job(
@@ -7735,7 +8224,7 @@ async fn submit_music_job(state: AppState, mut request: CreateMusicJobRequest, a
     }
 
     if state.training.active_run().await.is_some() {
-        return (StatusCode::CONFLICT, Json(failed_request_job(request, engine_id, "a LoRA is training on the card; make songs once it finishes".into())));
+        return (StatusCode::CONFLICT, Json(failed_request_job(request, engine_id, SongError::TrainingOnCard)));
     }
     // an adapter named without strengths starts where the create page starts it
     let slot_ids: Vec<&str> = music_engine::mm_server::ADAPTER_SLOTS.iter().map(|slot| slot.id).collect();
@@ -7755,9 +8244,19 @@ async fn submit_music_job(state: AppState, mut request: CreateMusicJobRequest, a
         Ok(tokens) if tokens > prompt_check::MAX_PROMPT_TOKENS => {
             return (StatusCode::BAD_REQUEST, Json(failed_request_job(request, engine_id, prompt_check::too_long_message(tokens))));
         }
-        Ok(_) => {}
+        Ok(tokens) => {
+            let max_seq = state.engine_options.read().await.max_seq;
+            // audio codes set the song's frames, as a re-render's do
+            let frames = match mm_request.get("audio_codes").and_then(Value::as_str) {
+                Some(codes) => prompt_check::replay_frames(codes),
+                None => prompt_check::song_frames(request.duration_seconds),
+            };
+            if let Some(refusal) = prompt_check::kv_cache_shortfall(tokens, frames, max_seq) {
+                return (StatusCode::BAD_REQUEST, Json(failed_request_job(request, engine_id, refusal)));
+            }
+        }
         // the engine enforces the same budget at submit; only the friendlier message is lost
-        Err(error) => eprintln!("[ERROR] the prompt length was not counted before submitting: {error:#}"),
+        Err(error) => studio_log!("[ERROR] the prompt length was not counted before submitting: {error:#}"),
     }
     match state.music_server.submit(engine_submission(&mm_request)).await {
         Ok(remote) => {
@@ -7779,12 +8278,14 @@ async fn submit_music_job(state: AppState, mut request: CreateMusicJobRequest, a
                 song: None,
                 songs: vec![],
                 message: "Submitted to mm-server. Progress is phase-only: queued, running, completed, failed, or cancelled.".into(),
+                code: None,
+                params: None,
                 playlist_id: request.playlist_id.clone(),
             };
             state.jobs.write().await.insert(job.id.clone(), job.clone());
             // kept at once, so a song the studio is closed on is not lost
             if let Err(error) = state.library.save_music_job(&stored_job(&job, stored_request, attempt)) {
-                eprintln!("[ERROR] the song's request could not be kept: {error:#}");
+                studio_log!("[ERROR] the song's request could not be kept: {error:#}");
             }
             spawn_job_watcher(state.clone(), job.id.clone());
             (StatusCode::ACCEPTED, Json(job))
@@ -7878,6 +8379,14 @@ async fn submit_replay_job(state: AppState, request: ReplayMusicJobRequest, atte
     let caption = synth_request.get("caption").and_then(Value::as_str).unwrap_or_default().to_owned();
     let lyrics = synth_request.get("lyrics").and_then(Value::as_str).unwrap_or_default().to_owned();
     let _using = state.engine_use.read().await;
+    let max_seq = state.engine_options.read().await.max_seq;
+    if max_seq.is_some() {
+        let tokens = state.music_server.tokenize(&caption, &lyrics).await.map_err(|error| api_error(StatusCode::SERVICE_UNAVAILABLE, format!("the engine did not count the prompt: {error:#}")))?;
+        let frames = prompt_check::replay_frames(synth_request.get("audio_codes").and_then(Value::as_str).unwrap_or_default());
+        if let Some(refusal) = prompt_check::kv_cache_shortfall(tokens, frames, max_seq) {
+            return Err(api_error(StatusCode::BAD_REQUEST, refusal.to_string()));
+        }
+    }
     let remote = state
         .music_server
         .submit(engine_submission(&synth_request))
@@ -7889,7 +8398,7 @@ async fn submit_replay_job(state: AppState, request: ReplayMusicJobRequest, atte
         id: remote.id, client_ref: request.client_ref.clone(), submitted_at: unix_millis(), engine_id: PRIMARY_MUSIC_ENGINE_ID.into(), title: source_title, status: MusicJobStatus::Queued,
         dispatch: MusicJobDispatch::Local, phase: MusicJobPhase::Queued, caption, lyrics,
         duration_seconds: synth_request.get("duration").and_then(Value::as_f64).unwrap_or_default(), generation_settings: synth_request,
-        song: None, songs: vec![], message: "Submitted replay synthesis to mm-server. audio_codes are present, so the autoregressive LM stage is skipped.".into(), playlist_id: None,
+        song: None, songs: vec![], message: "Submitted replay synthesis to mm-server. audio_codes are present, so the autoregressive LM stage is skipped.".into(), code: None, params: None, playlist_id: None,
     };
     if let Some(song_id) = &request.song_id {
         if let Some(original) = state.library.get_song(song_id).map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))? {
@@ -7899,7 +8408,7 @@ async fn submit_replay_job(state: AppState, request: ReplayMusicJobRequest, atte
     state.jobs.write().await.insert(job.id.clone(), job.clone());
     let stored_request = serde_json::json!({ "replay": serde_json::to_value(&request).unwrap_or(Value::Null) });
     if let Err(error) = state.library.save_music_job(&stored_job(&job, stored_request, attempt)) {
-        eprintln!("[ERROR] the re-render's request could not be kept: {error:#}");
+        studio_log!("[ERROR] the re-render's request could not be kept: {error:#}");
     }
     spawn_job_watcher(state.clone(), job.id.clone());
     Ok((StatusCode::ACCEPTED, Json(job)))
@@ -7932,12 +8441,12 @@ async fn create_openrouter_music_job(state: AppState, request: CreateMusicJobReq
     let engine_id = "openrouter".to_owned();
     let model_id = match model_id.filter(|model| !model.trim().is_empty()) {
         Some(model) => model,
-        None => return (StatusCode::BAD_REQUEST, Json(failed_request_job(request, engine_id, "OpenRouter music requires a selected model from the refreshed catalog".into()))),
+        None => return (StatusCode::BAD_REQUEST, Json(failed_request_job(request, engine_id, SongError::OpenRouterNoModel))),
     };
     let prompt = openrouter_music_prompt(&request);
     let catalog = match state.openrouter_catalog.read().await.catalog.clone() {
         Some(catalog) => catalog,
-        None => return (StatusCode::BAD_REQUEST, Json(failed_request_job(request, engine_id, "Refresh the OpenRouter catalog before starting cloud music generation".into()))),
+        None => return (StatusCode::BAD_REQUEST, Json(failed_request_job(request, engine_id, SongError::OpenRouterCatalogStale))),
     };
     let stream_request = match providers::openrouter::music_stream_request_for(&catalog, &model_id, &prompt) {
         Ok(request) => request,
@@ -7949,6 +8458,8 @@ async fn create_openrouter_music_job(state: AppState, request: CreateMusicJobReq
         dispatch: MusicJobDispatch::OpenRouter, phase: MusicJobPhase::Running, caption: request.caption, lyrics: request.lyrics,
         duration_seconds: request.duration_seconds, generation_settings: stream_request.request.body.clone(), song: None, songs: vec![],
         message: "OpenRouter music stream started; the completed audio will be imported into the studio library.".into(),
+        code: None,
+        params: None,
         playlist_id: request.playlist_id.clone(),
     };
     state.jobs.write().await.insert(job.id.clone(), job.clone());
@@ -8008,7 +8519,7 @@ async fn run_openrouter_music_generation(state: AppState, job_id: String, stream
             }
             job.songs = vec![song];
         }
-        Err(error) => { job.status = MusicJobStatus::Failed; job.phase = MusicJobPhase::Failed; job.message = format!("OpenRouter music generation failed: {error}"); }
+        Err(error) => { job.fail(SongError::OpenRouterFailed(error.to_string())); }
     }
 }
 
@@ -8123,6 +8634,8 @@ fn spawn_job_watcher(state: AppState, job_id: String) {
         // the parts as they were when the song started: the person may switch sets while it is made
         let parts_at_start = state.selected_component_ids.read().await.clone().unwrap_or_default();
         let mut started = None;
+        studio_log!("[song {job_id}] started");
+        let watched = std::time::Instant::now();
         follow_job(&state, &job_id, &mut started).await;
         let shared = another_job_under_way(&state, &job_id).await;
         let work = started.flatten().filter(|_| !shared).map(|at| at.elapsed());
@@ -8131,6 +8644,10 @@ fn spawn_job_watcher(state: AppState, job_id: String) {
             let profiles: Vec<String> = job.songs.iter().filter_map(|made| made.song.profile_id.clone()).collect();
             (job_status_name(&job.status), job.message.clone(), job.songs.len(), profiles, songs_seconds(&job.songs))
         });
+        if let Some((status, message, songs, ..)) = ended.as_ref() {
+            let mark = if *status == "failed" { "[ERROR] " } else { "" };
+            studio_log!("{mark}[song {job_id}] {status} after {:.1} s, {songs} tracks: {message}", watched.elapsed().as_secs_f64());
+        }
         if let Some(hub) = &state.hub {
             match ended.as_ref() {
                 Some(("completed", _, songs, profiles, seconds)) if *songs > 0 => {
@@ -8162,7 +8679,7 @@ fn spawn_job_watcher(state: AppState, job_id: String) {
             // a song that reached the library needs no record of its request any more
             let kept = if status == "completed" { state.library.forget_music_job(&job_id) } else { state.library.set_music_job_status(&job_id, status, &message) };
             if let Err(error) = kept {
-                eprintln!("[ERROR] the song's state could not be kept: {error:#}");
+                studio_log!("[ERROR] the song's state could not be kept: {error:#}");
             }
         }
     });
@@ -8191,13 +8708,11 @@ async fn follow_job(state: &AppState, job_id: &str, started: &mut Option<Option<
                     // job the engine answers it does not know was lost with
                     // the process that had it, and the log of that process
                     // says why.
-                    let forgotten = error.to_string().contains("404");
+                    let forgotten = error.to_string().starts_with("mm-server returned 404");
                     unreachable += 1;
                     if forgotten || unreachable >= 60 {
                         if let Some(job) = state.jobs.write().await.get_mut(&job_id) {
-                            job.status = MusicJobStatus::Failed;
-                            job.phase = MusicJobPhase::Failed;
-                            job.message = if forgotten { lost_job_reason(&previous_run_log()) } else { format!("mm-server stopped answering about this job: {error}") };
+                            job.fail(if forgotten { lost_job_reason(&previous_run_log()) } else { SongError::EngineUnreachable(error.to_string()) });
                         }
                         return;
                     }
@@ -8224,15 +8739,11 @@ async fn follow_job(state: &AppState, job_id: &str, started: &mut Option<Option<
                         }
                         job.songs = songs;
                     }
-                    Err(error) => {
-                        job.status = MusicJobStatus::Failed;
-                        job.phase = MusicJobPhase::Failed;
-                        job.message = format!("mm-server completed the job, but the studio could not safely import its result: {error}");
-                    }
+                    Err(error) => job.fail(SongError::ImportFailed(format!("{error:#}"))),
                 }
                 return;
             }
-            let failure = (remote.status == "failed").then(|| job_failure_reason(&state, &job_id)).flatten();
+            let failure = (remote.status == "failed").then(|| job_failure_reason(&job_id)).flatten();
             if let Some(job) = state.jobs.write().await.get_mut(&job_id) {
                 apply_remote_status(job, &remote.status, failure);
             }
@@ -8398,7 +8909,7 @@ async fn cancel_music_job(
             format!("mm-server cancel is unavailable: {error}"),
         )
     })?;
-    let failure = (remote.status == "failed").then(|| job_failure_reason(&state, &job_id)).flatten();
+    let failure = (remote.status == "failed").then(|| job_failure_reason(&job_id)).flatten();
     let mut jobs = state.jobs.write().await;
     let job = jobs
         .get_mut(&job_id)
@@ -8406,7 +8917,7 @@ async fn cancel_music_job(
     apply_remote_status(job, &remote.status, failure);
     // kept at once: a studio closed right after the stop must not start the song again
     if let Err(error) = state.library.set_music_job_status(&job_id, job_status_name(&job.status), &job.message) {
-        eprintln!("[ERROR] the stopped song's state could not be kept: {error:#}");
+        studio_log!("[ERROR] the stopped song's state could not be kept: {error:#}");
     }
     Ok(Json(job.clone()))
 }
@@ -8711,6 +9222,9 @@ fn mm_request_from(request: &CreateMusicJobRequest, selected_profile_id: Option<
     if !request.adapters.is_empty() {
         body["adapters"] = Value::Array(adapter_fields(&request.adapters)?);
     }
+    if let Some(codes) = request.audio_codes.as_deref().map(str::trim).filter(|codes| !codes.is_empty()) {
+        body["audio_codes"] = Value::from(codes);
+    }
     Ok(body)
 }
 
@@ -8768,11 +9282,14 @@ fn queued_not_configured_job(request: CreateMusicJobRequest, engine_id: String) 
         song: None,
         songs: vec![],
         message: "The selected local music engine is not configured; this job remains queued and no inference has started.".into(),
+        code: None,
+        params: None,
         playlist_id: None,
     }
 }
 
-fn failed_request_job(request: CreateMusicJobRequest, engine_id: String, error: String) -> MusicJob {
+fn failed_request_job(request: CreateMusicJobRequest, engine_id: String, error: impl Into<SongError>) -> MusicJob {
+    let error = error.into();
     MusicJob {
         derived: None,
         cover_prompt: None,
@@ -8790,7 +9307,9 @@ fn failed_request_job(request: CreateMusicJobRequest, engine_id: String, error: 
         generation_settings: serde_json::Value::Null,
         song: None,
         songs: vec![],
-        message: error,
+        message: error.to_string(),
+        code: error.code(),
+        params: error.code().map(|_| error.params()),
         playlist_id: None,
     }
 }
@@ -8799,7 +9318,7 @@ fn uuid_suffix() -> String {
     uuid::Uuid::now_v7().to_string()
 }
 
-fn apply_remote_status(job: &mut MusicJob, remote_status: &str, failure: Option<String>) {
+fn apply_remote_status(job: &mut MusicJob, remote_status: &str, failure: Option<SongError>) {
     match remote_status {
         "queued" => {
             job.status = MusicJobStatus::Queued;
@@ -8816,11 +9335,7 @@ fn apply_remote_status(job: &mut MusicJob, remote_status: &str, failure: Option<
             job.phase = MusicJobPhase::Completed;
             job.message = "mm-server completed this job; fetch its result from mm-server using the job id.".into();
         }
-        "failed" => {
-            job.status = MusicJobStatus::Failed;
-            job.phase = MusicJobPhase::Failed;
-            job.message = failure.unwrap_or_else(|| "mm-server reported a failed job; its log has the reason.".into());
-        }
+        "failed" => job.fail(failure.unwrap_or(SongError::EngineFailed)),
         "cancelled" => {
             job.status = MusicJobStatus::Cancelled;
             job.dispatch = MusicJobDispatch::Cancelled;
@@ -8897,11 +9412,50 @@ mod tests {
 
     #[test]
     fn a_lost_song_is_told_why_from_the_run_that_ended() {
-        assert!(lost_job_reason("ggml_backend_cuda_buffer_type_alloc_buffer: allocating 2048 MB on device 0: cudaMalloc failed: out of memory").contains("ran out of memory"));
-        assert!(lost_job_reason("[NAR] Step 3/16\nCUDA error: an illegal memory access was encountered\n  current device: 0").contains("(CUDA error: an illegal memory access was encountered)"));
-        assert!(lost_job_reason("ggml_cuda_compute_forward: MUL_MAT failed").contains("CUDA or driver error"));
-        assert!(lost_job_reason("[NAR] Step 2/16, 87844 ms\n[NAR] Step 3/16\n[studio] the engine stopped answering").contains("its last line was [NAR] Step 3/16."));
-        assert!(lost_job_reason("[Server] listening").contains("stopped during this song"));
+        assert!(lost_job_reason("ggml_backend_cuda_buffer_type_alloc_buffer: allocating 2048 MB on device 0: cudaMalloc failed: out of memory").to_string().contains("ran out of memory"));
+        assert!(lost_job_reason("[NAR] Step 3/16\nCUDA error: an illegal memory access was encountered\n  current device: 0").to_string().contains("(CUDA error: an illegal memory access was encountered)"));
+        assert!(lost_job_reason("ggml_cuda_compute_forward: MUL_MAT failed").to_string().contains("CUDA or driver error"));
+        assert!(lost_job_reason("[NAR] Step 2/16, 87844 ms\n[NAR] Step 3/16\n[studio] the engine stopped answering").to_string().contains("its last line was [NAR] Step 3/16."));
+        assert!(lost_job_reason("[Server] listening").to_string().contains("stopped during this song"));
+    }
+
+    #[test]
+    fn a_lost_song_names_how_the_engine_ended() {
+        let crashed = "[AR] Frame 1200/1500\n[studio] the previous engine had already exited: exit code: 0xc000001d (0xc000001d)";
+        let reason = lost_job_reason(crashed);
+        assert_eq!(reason.code(), Some("lost_exit_at_line"));
+        assert!(reason.to_string().contains("(an instruction this processor does not have, exit code 0xc000001d)"), "{reason}");
+        assert!(reason.to_string().contains("its last line was [AR] Frame 1200/1500."), "{reason}");
+        let unknown = lost_job_reason("[studio] the previous engine had already exited: exit code: 3 (0x3)");
+        assert_eq!(unknown.code(), Some("lost_exit"));
+        assert!(unknown.to_string().contains("(exit code 0x3)"), "{unknown}");
+    }
+
+    #[test]
+    fn a_chosen_card_that_is_not_there_is_said_not_left_to_the_processor() {
+        let cards = vec![(0, "NVIDIA GeForce RTX 4090".to_string(), 24.0)];
+        assert_eq!(missing_chosen_card(None, &cards), None);
+        assert_eq!(missing_chosen_card(Some(0), &cards), None);
+        let missing = missing_chosen_card(Some(1), &cards).expect("card 1 is not there");
+        assert!(missing.contains("number 1") && missing.contains("0: NVIDIA GeForce RTX 4090"), "{missing}");
+        assert!(missing_chosen_card(Some(0), &[]).expect("no card at all").contains("lists no NVIDIA card"));
+    }
+
+    #[test]
+    fn a_device_the_engine_does_not_have_is_named_with_the_ones_it_has() {
+        let log = "---- starting mm-server.exe ----\n--device CUDA0 not found. Available: Vulkan0 Vulkan1 CPU\nUsage: mm-server --models <dir>";
+        assert_eq!(absent_device(log), Some(("CUDA0".to_string(), "Vulkan0, Vulkan1, CPU".to_string())));
+        assert_eq!(absent_device("[Server] Listening on 127.0.0.1:8089"), None);
+    }
+
+    #[test]
+    fn the_run_that_ended_is_read_even_when_its_start_left_the_tail() {
+        let lines = |text: &str| text.lines().map(str::to_owned).collect::<Vec<_>>();
+        let ended = lines("[AR] Frame 1200/1500\n[studio] ---- starting mm-server ----\n[Server] Listening on 127.0.0.1:8086");
+        assert_eq!(previous_run(&ended), "[AR] Frame 1200/1500");
+        assert!(lost_job_reason(&previous_run(&ended)).to_string().contains("its last line was [AR] Frame 1200/1500."));
+        let both = lines("[studio] ---- starting mm-server ----\n[Server] Job a: {\n[studio] ---- starting mm-server ----\n[Server] Listening on 127.0.0.1:8086");
+        assert_eq!(previous_run(&both), "[studio] ---- starting mm-server ----\n[Server] Job a: {");
     }
 
     #[test]
@@ -8921,11 +9475,11 @@ mod tests {
     #[test]
     fn the_window_mark_comes_back_on_the_job() {
         let request: CreateMusicJobRequest = serde_json::from_value(serde_json::json!({ "caption": "synth-pop", "lyrics": "[Verse]", "duration_seconds": 60.0, "client_ref": "temp_1" })).unwrap();
-        let job = failed_request_job(request, "engine".into(), "x".into());
+        let job = failed_request_job(request, "engine".into(), "x");
         assert_eq!(serde_json::to_value(&job).unwrap()["client_ref"], "temp_1");
 
         let agent: CreateMusicJobRequest = serde_json::from_value(serde_json::json!({ "caption": "synth-pop", "lyrics": "[Verse]", "duration_seconds": 60.0 })).unwrap();
-        let job = failed_request_job(agent, "engine".into(), "x".into());
+        let job = failed_request_job(agent, "engine".into(), "x");
         assert!(serde_json::to_value(&job).unwrap().get("client_ref").is_none());
     }
 
@@ -8958,6 +9512,40 @@ mod tests {
         assert_eq!(found.iter().map(|(component, _)| component.id).collect::<Vec<_>>(), ["turbo"]);
     }
 
+    /// A file named as the catalogue's but of another build, and a GGUF of no
+    /// set, are said with the reason; the one taken and one already installed
+    /// are not.
+    #[test]
+    fn a_model_file_not_taken_is_named_with_why() {
+        use sha2::Digest;
+        let folder = tempfile::tempdir().unwrap();
+        let models = tempfile::tempdir().unwrap();
+        let sha = |body: &[u8]| -> &'static str { Box::leak(sha2::Sha256::digest(body).iter().map(|byte| format!("{byte:02x}")).collect::<String>().into_boxed_str()) };
+        let component = |id: &'static str, filename: &'static str, body: &[u8]| model_manager::Component { id, kind: "lm", filename, bytes: body.len() as u64, sha256: sha(body), repository: "org/repo", revision: "abc" };
+        let lm = component("lm-q4", "mm3-lm-Q4_K_M.gguf", b"pinned lm weights");
+        let dit = component("dit-q4", "mm3-dit-Q4_K_S.gguf", b"pinned dit weights");
+        let vocoder = component("vocoder", "vocoder.gguf", b"vocoder weights");
+        std::fs::write(folder.path().join("mm3-lm-Q4_K_M.gguf"), b"an imatrix build of the lm").unwrap();
+        std::fs::write(folder.path().join("mm3-lm-Q4_K_M-imat.gguf"), b"an imatrix build").unwrap();
+        std::fs::write(folder.path().join("mm3-dit-Q4_K_S.gguf"), b"pinned dit weights").unwrap();
+        std::fs::write(folder.path().join("vocoder.gguf"), b"vocoder").unwrap();
+        std::fs::write(models.path().join("vocoder.gguf"), b"vocoder weights").unwrap();
+        std::fs::write(folder.path().join("notes.txt"), b"x").unwrap();
+        let components = [lm, dit, vocoder];
+        let entries = adoptable_files(folder.path(), ADOPT_FOLDER_DEPTH);
+        let found = adoptable_sources(&components, models.path(), &entries);
+        let taken: Vec<std::path::PathBuf> = found.iter().map(|(_, source)| source.clone()).collect();
+        let mut refused = adopt_refusals(&components, models.path(), &entries, &taken);
+        refused.sort_by_key(|refusal| refusal["file"].as_str().unwrap_or_default().to_string());
+        assert_eq!(found.iter().map(|(component, _)| component.id).collect::<Vec<_>>(), ["dit-q4"]);
+        assert_eq!(refused.len(), 2, "{refused:?}");
+        assert_eq!(refused[0]["file"], "mm3-lm-Q4_K_M-imat.gguf");
+        assert_eq!(refused[0]["kind"], "unknown");
+        assert_eq!(refused[1]["file"], "mm3-lm-Q4_K_M.gguf");
+        assert_eq!(refused[1]["kind"], "size");
+        assert_eq!(refused[1]["needs"], b"pinned lm weights".len() as u64);
+    }
+
     #[test]
     fn a_device_failure_is_told_from_running_out_of_memory() {
         let ptx = "ggml_cuda_compute_forward: get_rows failed\ncuda error: the provided ptx was compiled with an unsupported toolchain.";
@@ -8969,7 +9557,26 @@ mod tests {
     }
 
     #[test]
-    fn an_engine_that_left_without_a_word_counts_as_a_lost_device() {
+    fn auto_leaves_a_device_for_the_session_only_when_the_log_names_its_failure() {
+        let ptx = "[server] starting\ncuda error: the provided ptx was compiled with an unsupported toolchain.";
+        assert_eq!(after_a_failed_start(ptx), (true, true));
+        assert_eq!(after_a_failed_start("[load] fatal: self-test on vulkan0 failed (status -1, result nan, expected 132)"), (true, true));
+        let slow = "---- starting mm-server.exe ----\n[load] lm backend: cuda0 (cpu threads: 16)";
+        assert_eq!(after_a_failed_start(slow), (true, false), "a slow start is no fault of the card");
+        assert_eq!(after_a_failed_start(""), (true, false), "an exit without a word is no fault of the card");
+        assert_eq!(after_a_failed_start("cuda error: out of memory\ncudamalloc failed"), (false, false));
+    }
+
+    #[test]
+    fn the_engine_folder_goes_first_on_path_once() {
+        let folder = std::env::temp_dir().join("mm3-engine");
+        let other = std::env::temp_dir().join("elsewhere");
+        let existing = std::env::join_paths([other.clone(), folder.clone()]).unwrap();
+        let path = path_with_first(&folder, &existing).unwrap();
+        assert_eq!(std::env::split_paths(&path).collect::<Vec<_>>(), vec![folder.clone(), other]);
+        let again = path_with_first(&folder, &path).unwrap();
+        assert_eq!(again, path, "a second start leaves PATH as it was");
+        assert_eq!(std::env::split_paths(&path_with_first(&folder, std::ffi::OsStr::new("")).unwrap()).next(), Some(folder));
     }
 
     #[test]
@@ -9110,7 +9717,6 @@ mod tests {
         for line in [
             "ggml_backend_cuda_buffer_type_alloc_buffer: allocating 4096 MB on device 0: cudaMalloc failed: out of memory",
             "CUDA error: out of memory",
-            "std::bad_alloc",
         ] {
             assert!(
                 describes_exhausted_memory(&line.to_lowercase()),
@@ -9118,6 +9724,26 @@ mod tests {
             );
         }
         assert!(!describes_exhausted_memory("loading model from disk"));
+        assert!(!describes_exhausted_memory("terminate called after throwing an instance of 'std::bad_alloc'"));
+    }
+
+    #[test]
+    fn a_failed_host_allocation_names_the_computer_s_memory_not_the_card() {
+        let log = "[AR] Frame 1200/1500\nterminate called after throwing an instance of 'std::bad_alloc'\n  what():  std::bad_alloc";
+        let reason = lost_job_reason(log).to_string();
+        assert!(reason.contains("ran out of memory (RAM)") && !reason.contains("graphics card"), "{reason}");
+        assert!(!describes_device_failure(&log.to_lowercase()));
+    }
+
+    #[test]
+    fn memory_that_runs_out_on_the_processor_is_the_computer_s() {
+        let on_cpu = "[Load] LM backend: CPU (CPU threads: 16)\n[Load] DiT backend: CPU (shared)\n[AR] Frame 300/1500\nggml_backend_cpu_buffer_type_alloc_buffer: failed to allocate buffer of size 4294967296";
+        let reason = lost_job_reason(on_cpu).to_string();
+        assert!(reason.contains("ran out of memory (RAM)") && !reason.contains("graphics card"), "{reason}");
+        let on_card = "[Load] LM backend: CUDA0 (CPU threads: 16)\n[Load] DiT backend: CUDA0 (shared)\nggml_backend_cuda_buffer_type_alloc_buffer: allocating 2048 MB on device 0: cudaMalloc failed: out of memory";
+        assert!(lost_job_reason(on_card).to_string().contains("graphics card ran out of memory"));
+        let card_after_processor = format!("{on_cpu}\n[studio] ---- starting mm-server ----\n{on_card}");
+        assert!(lost_job_reason(&card_after_processor).to_string().contains("graphics card"), "the last load names the device");
     }
 
     #[test]
@@ -9132,6 +9758,7 @@ mod tests {
     fn request_maps_only_confirmed_mm_server_fields() {
         let body = mm_request_from(&CreateMusicJobRequest {
             client_ref: None,
+            audio_codes: None,
             playlist_id: None,
             cover_prompt: None,
             adapters: Vec::new(),
@@ -9169,9 +9796,26 @@ mod tests {
     }
 
     #[test]
+    fn audio_codes_from_the_form_reach_the_engine() {
+        let request = |codes: Option<&str>| -> CreateMusicJobRequest {
+            serde_json::from_value(serde_json::json!({
+                "caption": "night drive", "lyrics": "[Verse]", "duration_seconds": 30.0, "audio_codes": codes,
+                "models": { "lm_model": "lm.gguf", "depth_model": "depth.gguf", "cond_model": "condition.gguf", "dit_model": "dit.gguf", "vae_model": "vocoder.gguf" },
+            }))
+            .unwrap()
+        };
+        let body = mm_request_from(&request(Some(" 1,2,3,4,5,6,7,8 ")), None, None, None).unwrap();
+        assert_eq!(body["audio_codes"], "1,2,3,4,5,6,7,8");
+        for empty in [None, Some(""), Some("  ")] {
+            assert!(mm_request_from(&request(empty), None, None, None).unwrap().get("audio_codes").is_none());
+        }
+    }
+
+    #[test]
     fn request_rejects_legacy_audio_formats_not_supported_by_mm_server() {
         let error = mm_request_from(&CreateMusicJobRequest {
             client_ref: None,
+            audio_codes: None,
             playlist_id: None,
             cover_prompt: None,
             adapters: Vec::new(),
@@ -9204,6 +9848,7 @@ mod tests {
     fn request_uses_confirmed_mm3_defaults_and_rejects_invalid_synth_batch() {
         let request = CreateMusicJobRequest {
             client_ref: None,
+            audio_codes: None,
             playlist_id: None,
             cover_prompt: None,
             adapters: Vec::new(),
@@ -9280,6 +9925,7 @@ mod tests {
         let mut job = queued_not_configured_job(
             CreateMusicJobRequest {
                 client_ref: None,
+                audio_codes: None,
                 playlist_id: None,
                 cover_prompt: None,
                 adapters: Vec::new(),
@@ -9329,6 +9975,20 @@ mod tests {
         assert_eq!(prepared["output_format"], "mp3");
         assert_eq!(prepared["dit_model"], "dit-q6.gguf");
         assert_eq!(prepared["lm_seed"], 123);
+    }
+
+    #[test]
+    fn the_library_list_leaves_the_replay_data_out_and_says_whether_it_is_kept() {
+        let song = |replay: Option<Value>, codes: Option<Value>| library::Song {
+            id: "s".into(), title: "t".into(), audio_path: None, caption: String::new(), lyrics: String::new(),
+            metadata: serde_json::json!({}), generation_settings: serde_json::json!({}), engine_id: "mm-server".into(),
+            profile_id: None, replay_request: replay, audio_codes: codes, source: String::new(), created_at: String::new(), updated_at: String::new(),
+        };
+        let listed = listed_song(&song(Some(serde_json::json!({ "caption": "night drive" })), Some(Value::String("1,2,3,4,5,6,7,8".into())))).unwrap();
+        assert!(listed.get("replay_request").is_none() && listed.get("audio_codes").is_none());
+        assert_eq!(listed["replay_available"], true);
+        assert_eq!(listed_song(&song(Some(serde_json::json!({ "caption": "night drive" })), Some(Value::String(String::new())))).unwrap()["replay_available"], false);
+        assert_eq!(listed_song(&song(None, None)).unwrap()["replay_available"], false);
     }
 
     #[test]

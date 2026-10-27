@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { karaokeStatusChanged, useSystemResources } from '../services/studioQueries';
 import { AlertTriangle, BookOpen, Check, CheckSquare, ChevronDown, Clock, ChevronLeft, ChevronRight, Cpu, Download, FolderInput, FolderOpen, FolderOutput, Headphones, Library, Loader2, Mic2, MoreHorizontal, Music, Play, Plus, RotateCcw, Search, Square, Trash2, UploadCloud, Wand2, X } from 'lucide-react';
 import { useI18n } from '../context/I18nContext';
+import { AUDIO_ACCEPT } from '../services/audioFiles';
+import { poll } from '../services/poll';
 import { ConfirmDialog } from './ConfirmDialog';
 import { StemPlayer } from './StemPlayer';
 import { TrainingGuide } from './TrainingGuide';
@@ -351,9 +353,9 @@ const separateOnCard = async () => {
   if (!response.ok) throw new Error(`Separation: HTTP ${response.status}`);
 };
 
-/** Turns on the recogniser dataset lyrics need: Whisper large-v3, fetched on its first use. */
+/** Turns on the recogniser dataset lyrics need: CrisperWhisper, fetched on its first use. */
 const enableRecogniser = () =>
-  fetch('/v1/karaoke/status', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: true, provider: 'whisper', whisper_model: 'whisper-large-v3' }) }).then(response => {
+  fetch('/v1/karaoke/status', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: true, provider: 'whisper' }) }).then(response => {
     if (!response.ok) throw new Error(`Karaoke: HTTP ${response.status}`);
     karaokeStatusChanged();
   });
@@ -417,7 +419,7 @@ const DropZone: React.FC<{ onPicked: (files: PickedFile[]) => void; disabled?: b
         <button type="button" onClick={() => fileInput.current?.click()} className={OUTLINE}><Music size={13} />{t('trainingDropFiles')}</button>
       </div>
       <input ref={folderInput} type="file" multiple className="hidden" onChange={event => { take(pickedFromInput(event.target.files)); event.target.value = ''; }} />
-      <input ref={fileInput} type="file" multiple accept="audio/*,.wav,.mp3,.flac,.ogg,.m4a,.aiff,.aif,.txt,.lrc,.cue" className="hidden" onChange={event => { take(pickedFromInput(event.target.files)); event.target.value = ''; }} />
+      <input ref={fileInput} type="file" multiple accept={`${AUDIO_ACCEPT},.txt,.lrc,.cue`} className="hidden" onChange={event => { take(pickedFromInput(event.target.files)); event.target.value = ''; }} />
     </div>
   );
 };
@@ -1055,9 +1057,7 @@ export const TrainingPanel: React.FC = () => {
   const job = state?.prepare ?? null;
   const busy = Boolean(state?.active || (job && !job.finished) || adding || (state?.download && !state.download.done) || (state?.listen?.download && !state.listen.download.done));
   useEffect(() => {
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), busy ? 1500 : 5000);
-    return () => window.clearInterval(timer);
+    return poll(refresh, busy ? 1500 : 5000);
   }, [refresh, busy]);
 
   // a run that starts by itself after preparation is shown where it runs

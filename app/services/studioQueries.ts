@@ -22,8 +22,15 @@ export const queryClient = new QueryClient({
   },
 });
 
+/**
+ * The header of a read the window makes by itself to keep its screens current - a status poll, the hardware, a list
+ * read again: the hub does not count it as a feature used, so its counts are what a person or an agent asked for.
+ */
+export const SELF_READ: Record<string, string> = { 'x-hub-skip': '1' };
+
+/** A state read the window makes by itself. */
 export async function readJson<T>(path: string): Promise<T> {
-  const response = await fetch(path);
+  const response = await fetch(path, { headers: SELF_READ });
   if (!response.ok) throw new Error(`${path} answered ${response.status}`);
   return (await response.json()) as T;
 }
@@ -205,6 +212,8 @@ export function librarySongsNow(): Song[] | undefined {
   return queryClient.getQueryData<Song[]>(librarySongsKey);
 }
 
+const LIBRARY_READ_GAP_MS = 2_000;
+
 if (typeof window !== 'undefined') {
   // an agent's change reaches every screen showing what it changed
   window.addEventListener('mm3:settings-changed', () => {
@@ -214,11 +223,17 @@ if (typeof window !== 'undefined') {
     coverLookChanged();
   });
   window.addEventListener('mm3:models-changed', setupStatusChanged);
-  // six stems or a batch delete arrive as one burst and are read once
-  let libraryBurst = 0;
+  // a burst of changes is read at most every LIBRARY_READ_GAP_MS, and always once after its last change
+  let libraryRead = 0;
+  let lastLibraryRead = 0;
   window.addEventListener('mm3:library-changed', () => {
-    window.clearTimeout(libraryBurst);
-    libraryBurst = window.setTimeout(libraryChanged, 200);
+    if (libraryRead) return;
+    const wait = Math.max(200, lastLibraryRead + LIBRARY_READ_GAP_MS - Date.now());
+    libraryRead = window.setTimeout(() => {
+      libraryRead = 0;
+      lastLibraryRead = Date.now();
+      libraryChanged();
+    }, wait);
   });
 }
 
@@ -249,7 +264,7 @@ export function usePromptCheck(caption: string, lyrics: string, instrumental: bo
     queryFn: async () => {
       const response = await fetch('/v1/music/prompt-check', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...SELF_READ, 'Content-Type': 'application/json' },
         body: JSON.stringify(asked),
       });
       if (!response.ok) throw new Error(`/v1/music/prompt-check answered ${response.status}`);

@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { Check, Copy } from 'lucide-react';
 import { useI18n } from '../context/I18nContext';
+import { poll } from '../services/poll';
 import { apiUrl } from '../services/apiBase';
+import { SELF_READ } from '../services/studioQueries';
 
 /**
  * The studio's MCP server, for the user connecting an agent to it: whether
@@ -58,7 +60,7 @@ export const AgentPanel: React.FC = () => {
   useEffect(() => {
     let alive = true;
     const load = () =>
-      fetch(apiUrl('/mcp/status'))
+      fetch(apiUrl('/mcp/status'), { headers: SELF_READ })
         .then(async (response) => {
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           return response.json() as Promise<McpStatus>;
@@ -69,11 +71,10 @@ export const AgentPanel: React.FC = () => {
           setFailed(null);
         })
         .catch((error: Error) => alive && setFailed(error.message));
-    void load();
-    const timer = window.setInterval(() => void load(), 3000);
+    const stop = poll(load, 3000);
     return () => {
       alive = false;
-      window.clearInterval(timer);
+      stop();
     };
   }, []);
 

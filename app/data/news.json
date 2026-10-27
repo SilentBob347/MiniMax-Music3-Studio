@@ -1,5 +1,41 @@
 [
   {
+    "id": "minimax-music3-studio-3-8-0",
+    "date": "2026-10-27",
+    "title": {
+      "en": "MiniMax Music3 Studio 3.8.0",
+      "ru": "MiniMax Music3 Studio 3.8.0",
+      "zh": "MiniMax Music3 Studio 3.8.0",
+      "ja": "MiniMax Music3 Studio 3.8.0",
+      "ko": "MiniMax Music3 Studio 3.8.0"
+    },
+    "body": {
+      "en": "Models through HF-Mirror or by hand, karaoke on CrisperWhisper, an update screen that says what changes, and the most frequent failures of 3.7.0 fixed.\n\n- **Models through HF-Mirror:** a download source in Settings - Providers - Proxy, offered on the first start when Hugging Face does not answer; every missing file can also be downloaded by hand, with its name, size and pinned address.\n- **\"Use models I already have\" says what it took** and names each file it left, with the reason.\n- **Mel-Band RoFormer and HT-Demucs download** from Settings - Models - Split into stems again.\n- **The compute device chosen in Settings reaches the engine,** and a failed song names its cause: a crash in words, the computer's memory or the card's, the card and driver of a CUDA error.\n- **Karaoke hears with CrisperWhisper 2.0 turbo** on audio.cpp's server, with a time for every word.\n- **The update screen:** the first start says what this version updates, adds and no longer needs, with the space it frees; one button does it all.\n- **Every download is checked against its publisher's hash** and fails fast naming the server it cannot reach; audio codes in the Create form are used, and a models folder in any alphabet works.\n- **An Analyzer spectrum,** diagnostics with a bug-report pack, more audio formats, genre meanings in your language, and the Library's details beside the list.\n\nThe whole list is in News.",
+      "ru": "Модели через HF-Mirror или вручную, караоке на CrisperWhisper, экран обновления, который говорит, что меняется, и самые частые сбои 3.7.0 исправлены.\n\n- **Модели через HF-Mirror:** источник закачки в Настройки - Провайдеры - Прокси; при первом запуске студия сама предложит зеркало, если Hugging Face не отвечает. Каждый недостающий файл можно скачать и вручную: имя, размер и закреплённый адрес.\n- **«Взять уже скачанные модели» говорит, что взято,** и называет каждый пропущенный файл с причиной.\n- **Mel-Band RoFormer и HT-Demucs снова скачиваются** из Настройки - Модели - Разделить на стемы.\n- **Устройство, выбранное в настройках, доходит до движка,** а песня, которая не вышла, называет причину: сбой словами, память компьютера или карты, карту и драйвер при ошибке CUDA.\n- **Караоке слушает CrisperWhisper 2.0 turbo** на сервере audio.cpp, со временем каждого слова.\n- **Экран обновления:** при первом запуске студия показывает, что эта версия обновит, добавит и уберёт, и сколько места освободится; одна кнопка делает всё.\n- **Каждая закачка сверяется с хешем издателя,** быстро сдаётся и называет сервер, до которого нет связи; audio codes в форме «Создать» работают, папка моделей с любыми буквами тоже.\n- **Спектр «Анализ»,** диагностика с архивом для отчёта об ошибке, больше аудиоформатов, значения жанров на вашем языке, сведения о песне рядом со списком в Медиатеке.\n\nПолный список — в «Новостях».",
+      "zh": "模型可经 HF-Mirror 或手动下载，卡拉OK 改用 CrisperWhisper，新增说明变化的更新界面，并修复了 3.7.0 最常见的故障。\n\n- **模型可经 HF-Mirror 下载：**在「设置 - 提供方 - 代理」中选择下载源；Hugging Face 无响应时，首次启动会提供镜像。每个缺失的文件也可手动下载，并给出文件名、大小和固定地址。\n- **「使用我已有的模型」会说明取用了哪些文件，**并逐一列出未取用的文件及原因。\n- **Mel-Band RoFormer 和 HT-Demucs** 又能在「设置 - 模型 - 分离为分轨」中下载。\n- **设置中选择的计算设备会传给引擎，**失败的歌曲会说明原因：用文字描述的崩溃、电脑内存或显存不足、CUDA 错误时的显卡和驱动。\n- **卡拉OK 使用 CrisperWhisper 2.0 turbo** 在 audio.cpp 服务器上识别，每个词都有时间。\n- **更新界面：**首次启动时列出本版本更新、新增和不再需要的内容及释放的空间，一个按钮全部完成。\n- **每个下载都按发布者公布的哈希校验，**连不上时很快放弃并说明是哪个服务器；「创建」表单中的 audio codes 会被使用，任何文字的模型文件夹都能使用。\n- **「分析」频谱，**诊断与错误报告包、更多音频格式、以你的语言显示的曲风含义、媒体库中详情显示在列表旁。\n\n完整列表见「新闻」。",
+      "ja": "モデルは HF-Mirror 経由や手動でも、カラオケは CrisperWhisper に、変更内容を伝える更新画面、そして 3.7.0 で多かった不具合を修正。\n\n- **HF-Mirror 経由のモデル：**「設定 - プロバイダー - プロキシ」でダウンロード元を選べ、Hugging Face が応答しないときは初回起動時にミラーを提案します。足りないファイルは名前・サイズ・固定アドレス付きで手動でもダウンロードできます。\n- **「すでにあるモデルを使う」は取り込んだものを伝え、**取り込まなかったファイルを理由とともに示します。\n- **Mel-Band RoFormer と HT-Demucs** が「設定 - モデル - ステムに分ける」から再びダウンロードできます。\n- **設定で選んだ計算デバイスがエンジンに届き、**失敗した曲は原因を示します：言葉で伝えるクラッシュ、PC かカードのメモリ、CUDA エラー時のカードとドライバー。\n- **カラオケは CrisperWhisper 2.0 turbo** が audio.cpp サーバーで聞き取り、単語ごとの時間付き。\n- **更新画面：**初回起動時に、このバージョンで更新・追加・不要になるものと空く容量を表示し、ボタン一つで実行。\n- **すべてのダウンロードを配布元のハッシュで検証し、**つながらないときはすぐに諦めてサーバー名を示します。「作成」フォームの audio codes が使われ、どの文字のモデルフォルダでも動作します。\n- **アナライザー**スペクトル、診断とバグ報告パック、対応音声形式の追加、ジャンルの意味をあなたの言語で、ライブラリで一覧の横に詳細。\n\nすべての変更は「ニュース」に。",
+      "ko": "모델은 HF-Mirror나 수동으로도, 노래방은 CrisperWhisper로, 무엇이 바뀌는지 알려 주는 업데이트 화면, 그리고 3.7.0에서 가장 잦던 오류를 고쳤습니다.\n\n- **HF-Mirror로 모델 받기:** 설정 - 제공자 - 프록시에서 다운로드 출처를 고르고, Hugging Face가 응답하지 않으면 처음 실행할 때 미러를 제안합니다. 빠진 파일은 이름, 크기, 고정 주소와 함께 직접 받을 수도 있습니다.\n- **\"이미 있는 모델 사용\"은 가져온 것을 알려 주고,** 남긴 파일마다 이유를 밝힙니다.\n- **Mel-Band RoFormer와 HT-Demucs**를 설정 - 모델 - 스템으로 분리에서 다시 받을 수 있습니다.\n- **설정에서 고른 연산 장치가 엔진에 전달되고,** 실패한 곡은 원인을 알려 줍니다: 말로 설명하는 충돌, 컴퓨터나 카드의 메모리, CUDA 오류의 카드와 드라이버.\n- **노래방은 CrisperWhisper 2.0 turbo**가 audio.cpp 서버에서 듣고, 단어마다 시간을 붙입니다.\n- **업데이트 화면:** 처음 실행할 때 이 버전이 업데이트·추가·정리하는 것과 확보되는 공간을 보여 주고, 버튼 하나로 처리합니다.\n- **모든 다운로드를 배포처의 해시로 확인하고,** 연결이 안 되면 빨리 포기하며 서버 이름을 알려 줍니다. 만들기 양식의 audio codes가 쓰이고, 어떤 문자의 모델 폴더도 동작합니다.\n- **분석기** 스펙트럼, 진단과 오류 보고 묶음, 더 많은 오디오 형식, 사용자의 언어로 보는 장르 뜻, 미디어 라이브러리에서 목록 옆의 상세 정보.\n\n전체 목록은 뉴스에 있습니다."
+    },
+    "tags": [
+      "MiniMax",
+      "3.8.0"
+    ],
+    "links": [
+      {
+        "label": "YuE2 Studio",
+        "url": "https://timoncool.github.io/YuE2-Studio/"
+      },
+      {
+        "label": "MiniMax Music3 Studio",
+        "url": "https://timoncool.github.io/MiniMax-Music3-Studio/"
+      },
+      {
+        "label": "ACE-Step Studio",
+        "url": "https://timoncool.github.io/ACE-Step-Studio/"
+      }
+    ]
+  },
+  {
     "id": "minimax-music3-studio-3-7-0",
     "date": "2026-10-20",
     "title": {

@@ -7,7 +7,9 @@ param(
     [ValidateSet('nsis')]
     [string]$BundleTarget = 'nsis',
     # The CUDA 12 toolkit of the engine's second CUDA backend.
-    [string]$Cuda12Root = $env:CUDA_PATH_V12_9
+    [string]$Cuda12Root = $env:CUDA_PATH_V12_9,
+    # Folders that hold the downloaded runtimes the DLL import check reads (separated by ';').
+    [string[]]$DllSources = $(if ($env:MM3_DLL_SOURCES) { $env:MM3_DLL_SOURCES -split ';' } else { @() })
 )
 
 $ErrorActionPreference = 'Stop'
@@ -123,6 +125,8 @@ try {
     # without cuBLAS and could not start on a machine without the CUDA Toolkit.
     cargo test --workspace
     if ($LASTEXITCODE -ne 0) { throw "cargo test failed with exit code $LASTEXITCODE" }
+    if (-not $DllSources) { throw "MM3_DLL_SOURCES (or -DllSources) must list the folders that hold the studios' downloaded runtimes, for the DLL import check" }
+    & (Join-Path $PSScriptRoot 'check-dll-imports.ps1') -Sources $DllSources
 
     # The changelog the news page shows is built from the history, and nothing else
     # produces it: without this a release ships whatever app/data/changelog.json

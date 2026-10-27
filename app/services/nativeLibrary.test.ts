@@ -43,4 +43,10 @@ describe('mapNativeLibrarySong', () => {
     expect(withoutAudio.audioUrl).toBeUndefined();
     expect(withoutAudio.nativeReplayAvailable).toBe(false);
   });
+
+  it('takes replay from the list flag, which comes without the replay data', () => {
+    const listed = (replay_available: boolean) => mapNativeLibrarySong({ id: 'l', title: 'L', caption: '', lyrics: '', engine_id: 'e', created_at: '1', replay_available });
+    expect(listed(true).nativeReplayAvailable).toBe(true);
+    expect(listed(false).nativeReplayAvailable).toBe(false);
+  });
 });

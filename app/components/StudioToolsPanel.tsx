@@ -8,11 +8,13 @@ import { ConfirmDialog } from './ConfirmDialog';
 import { MidiTool } from './midi/MidiTool';
 import { MidiEditor } from './midi/MidiEditor';
 import { useI18n } from '../context/I18nContext';
+import { poll } from '../services/poll';
 import { saveFile } from '../services/saveFile';
 import { tempoAndKey } from '../services/songDownload';
 import { DevicePicker } from './DevicePicker';
 import { transcribeWithNativeOpenRouter } from '../services/nativeOpenRouter';
 import { apiUrl } from '../services/apiBase';
+import { SELF_READ } from '../services/studioQueries';
 import { openExternal } from '../services/externalLinks';
 import { StemPlayer } from './StemPlayer';
 
@@ -115,18 +117,16 @@ export function StudioToolsPanel({ initialSongId }: { initialSongId?: string | n
 
   // The separation state, and which stems the chosen track already has.
   const refresh = useCallback(async () => {
-    const separation: SeparationStatus = await fetch('/v1/separation/status').then(response => response.json());
+    const separation: SeparationStatus = await fetch('/v1/separation/status', { headers: SELF_READ }).then(response => response.json());
     setStatus(separation);
     if (songId) {
-      const body = await fetch(`/v1/library/songs/${encodeURIComponent(songId)}/stems`).then(response => response.json());
+      const body = await fetch(`/v1/library/songs/${encodeURIComponent(songId)}/stems`, { headers: SELF_READ }).then(response => response.json());
       setStems(body.stems ?? []);
     }
   }, [songId]);
 
   useEffect(() => {
-    void refresh().catch(() => undefined);
-    const timer = window.setInterval(() => void refresh().catch(() => undefined), 1000);
-    return () => window.clearInterval(timer);
+    return poll(() => refresh().catch(() => undefined), 1000);
   }, [refresh]);
 
   const saveSettings = async (next: SeparationStatus['settings']) => {

@@ -2,7 +2,7 @@ use std::{
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
-    process::{Child, Command, ExitStatus},
+    process::{Child, ExitStatus},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -185,7 +185,7 @@ impl AudioCppAdapter {
     }
 
     pub fn spawn(&self, prepared: PreparedGeneration) -> Result<RunningGeneration> {
-        let child = Command::new(&prepared.executable)
+        let child = dub_core::proc::host_command(&prepared.executable)
             .args(&prepared.arguments)
             .spawn()
             .with_context(|| format!("start audio.cpp: {}", prepared.executable.display()))?;
