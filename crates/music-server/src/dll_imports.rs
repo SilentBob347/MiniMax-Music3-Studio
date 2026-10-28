@@ -287,6 +287,7 @@ fn local_tcpp(build: dub_tcpp::Build, roots: &[PathBuf]) -> Result<Option<PathBu
     let pin = build.download();
     let backend = match build {
         dub_tcpp::Build::Cuda => "cuda",
+        dub_tcpp::Build::Cuda12 => "cuda12",
         dub_tcpp::Build::Vulkan => "vulkan",
         dub_tcpp::Build::Cpu => "cpu",
     };
